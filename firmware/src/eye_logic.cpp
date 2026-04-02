@@ -16,7 +16,7 @@
 // --- Module-Private State ---
 
 // Global state for each eye's position
-static EyePosition eye_positions[NUM_SCREEN];
+static EyePosition eye_positions[NUM_EYES];
 
 // Saccade (random movement) variables
 static unsigned long last_saccade_time = 0;
@@ -70,14 +70,14 @@ void update_eye_positions(const TofTarget& target) {
     }
 
     // Smoothly interpolate (LERP) each eye's position towards the final target.
-    for (int i = 0; i < NUM_SCREEN; i++) {
+    for (int i = 0; i < NUM_EYES; i++) {
         eye_positions[i].x += (final_target_x - eye_positions[i].x) * LERP_SPEED;
         eye_positions[i].y += (final_target_y - eye_positions[i].y) * LERP_SPEED;
     }
 }
 
 EyePosition get_eye_position(int eye_index) {
-    if (eye_index >= 0 && eye_index < NUM_SCREEN) {
+    if (eye_index >= 0 && eye_index < NUM_EYES) {
         return eye_positions[eye_index];
     }
     return EyePosition{0.0f, 0.0f}; // Return a default/safe value by explicitly constructing it

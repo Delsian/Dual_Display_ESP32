@@ -20,10 +20,10 @@ TFT_eSPI tft = TFT_eSPI();
 
 // --- Global Variables ---
 
-Screen screens[NUM_SCREEN]; // Definition for the screen configuration array
+Screen screens[NUM_EYES]; // Definition for the screen configuration array
 
 // Framebuffers for off-screen drawing
-uint16_t* framebuffers[NUM_SCREEN];
+uint16_t* framebuffers[NUM_EYES];
 static int8_t active_screen_index = 0;
 
 // --- Image Buffer ---
@@ -86,7 +86,7 @@ void log_tft_setup() {
  * @param ind The index of the screen to select (EYE_LEFT or EYE_RIGHT).
  */
 void select_screen(int16_t ind) {
-  if (ind < 0 || ind >= NUM_SCREEN) return;
+  if (ind < 0 || ind >= NUM_EYES) return;
   digitalWrite(screens[EYE_LEFT].CS, (ind == EYE_LEFT) ? LOW : HIGH);
   digitalWrite(screens[EYE_RIGHT].CS, (ind == EYE_RIGHT) ? LOW : HIGH);
   active_screen_index = ind;
@@ -122,7 +122,7 @@ void clear_buffer(uint16_t color) {
  * @param color The 16-bit color to fill the screens with.
  */
 void clear_all_screens(uint16_t color) {
-  for (int i = 0; i < NUM_SCREEN; i++) {
+  for (int i = 0; i < NUM_EYES; i++) {
     select_screen(i);
     tft.fillScreen(color);
   }
@@ -133,7 +133,7 @@ void clear_all_screens(uint16_t color) {
  * @param ind The index of the screen/framebuffer to display.
  */
 void display_buffer(int16_t ind) {
-  if (ind < 0 || ind >= NUM_SCREEN) return;
+  if (ind < 0 || ind >= NUM_EYES) return;
   select_screen(ind); // Ensure correct screen is selected
   tft.pushImage(0, 0, SCR_WD, SCR_HT, framebuffers[ind]);
 }
@@ -142,8 +142,9 @@ void display_buffer(int16_t ind) {
  * @brief Pushes both framebuffers to their respective screens.
  */
 void display_all_buffers() {
-  display_buffer(EYE_LEFT);
-  display_buffer(EYE_RIGHT);
+  for (int i = 0; i < NUM_EYES; i++) {
+    display_buffer(i);
+  }
 }
 
 /**
@@ -152,6 +153,13 @@ void display_all_buffers() {
  * circular drawing operations.
  */
 void precalculate_scanlines() {
+#if DRAW_AREA_SQUARE
+    // Configuration pour une zone de dessin carrée (tout l'écran)
+    for (int16_t y = 0; y < SCR_HT; y++) {
+        circular_scanlines[y].x_start = 0;
+        circular_scanlines[y].x_end = SCR_WD;
+    }
+#else
     const int16_t screen_center = SCR_WD / 2;
     const int32_t radius_sq = screen_center * screen_center;
 
@@ -168,6 +176,7 @@ void precalculate_scanlines() {
             circular_scanlines[y].x_end = -1;
         }
     }
+#endif
 }
 
 /**
@@ -247,7 +256,7 @@ void drawString_fb(const char *string, int32_t x, int32_t y, uint16_t fgcolor) {
  */
 void init_tft() {
   // Allocate framebuffers in PSRAM
-  for (int i = 0; i < NUM_SCREEN; i++) {
+  for (int i = 0; i < NUM_EYES; i++) {
     framebuffers[i] = (uint16_t*)ps_malloc(SCR_WD * SCR_HT * sizeof(uint16_t));
     if (framebuffers[i] == nullptr) {
       Serial.printf("FATAL: Failed to allocate framebuffer %d in PSRAM\n", i);
@@ -605,7 +614,7 @@ void show_splash_screen() {
     int16_t y_pos = (SCR_HT - spr.height()) / 2; // Use spr.height() which includes the descender margin
 
     // Draw the splash screen to both framebuffers
-    for (int i = 0; i < NUM_SCREEN; i++) {
+    for (int i = 0; i < NUM_EYES; i++) {
         select_screen(i);
         clear_buffer(bg_color);
         pushSpriteToFb(&spr, x_pos, y_pos, framebuffers[i], bg_color);

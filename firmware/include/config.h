@@ -13,21 +13,25 @@
 #define CONFIG_H
 
 // --- Hardware & Pinout Configuration ---
-#define PIN_CS1 5 // Chip-select for screen 1
-#define PIN_CS2 7 // Chip-select for screen 2
+#define PIN_CS1 TFT_CS_L // Chip-select for screen 1
+#define PIN_CS2 TFT_CS_R // Chip-select for screen 2
 
 // --- ToF Sensor (VL53L5CX) Configuration ---
-#define USE_TOF_SENSOR 1 // Set to 1 to enable the ToF sensor, 0 to disable it.
+#define USE_TOF_SENSOR 0 // Set to 1 to enable the ToF sensor, 0 to disable it.
 #define TOF_CALIBRATION_MODE 0 // Set to 1 to simulate sensor data for debugging.
 #define SHOW_TOF_DEBUG_GRID 1 // Set to 1 to display the debug grid, 0 to hide it
 
-#define PIN_TOF_SCL 15
-#define PIN_TOF_SDA 16
-#define PIN_TOF_INT 17
+#define PIN_TOF_SCL 8
+#define PIN_TOF_SDA 18
+#define PIN_TOF_INT -1
+
+// --- Nombre d'écrans (yeux) ---
+#define NUM_EYES 2 // Mettre à 1 pour un seul oeil, 2 pour deux yeux
 
 // --- Display & Image Configuration ---
 #define SCR_WD 240 // Screen width in pixels
 #define SCR_HT 240 // Screen height in pixels
+#define DRAW_AREA_SQUARE 1 // Set to 1 for a square drawing area, 0 for circular.
 
 #define EYE_IMAGE_WIDTH  350
 #define EYE_IMAGE_HEIGHT 350

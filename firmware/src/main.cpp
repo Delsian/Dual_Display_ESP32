@@ -4,7 +4,7 @@
  * @brief Main firmware for the dual-display animated eye project.
  * @version 1.1
  *
- * @copyright Copyright (c) 2025
+ * @copyright Copyright (c) 2024
  *
  * @license See LICENSE.md for details.
  *
@@ -12,10 +12,20 @@
 
 #include <Arduino.h>
 #include "config.h"
+// #include "esp32-hal-log.h" // Désactivé pour le débogage
+#include "LittleFS.h"
+// --- Bibliothèques désactivées pour le débogage ---
 #include "drawing_tools.h"
 #include "eye_logic.h"
 #include "tof_sensor.h"
-#include "LittleFS.h"
+
+// --- FPS Counter Variables ---
+// --- LED Blink Configuration ---
+#define LED_PIN 48 // Broche de la LED intégrée. Changez-la si nécessaire (ex: LED_BUILTIN, 2, etc.)
+
+// --- Battery Monitoring ---
+#define BATT_ADC_PIN 4 // Broche ADC pour la lecture de la tension de la batterie
+
 
 // --- FPS Counter Variables ---
 static unsigned long last_fps_time = 0;
@@ -26,46 +36,95 @@ static float current_fps = 0.0f;
 // --- Debugging ---
 
 /**
+ * @brief Lit la tension de la batterie et la retourne en pourcentage.
+ * @return Le pourcentage de batterie restant (0-100).
+ */
+int get_battery_percentage() {
+  // Lit la valeur brute de l'ADC (0-4095)
+  uint32_t raw_value = analogRead(BATT_ADC_PIN);
+
+  // Convertit la valeur brute en millivolts à la broche ADC
+  // La référence de tension est d'environ 3.3V (3300mV) pour une lecture max de 4095
+  float adc_voltage = (raw_value / 4095.0) * 3300.0;
+
+  // La tension de la batterie est le double de la tension lue à cause du diviseur de tension
+  float battery_voltage = adc_voltage * 2.0;
+
+  // Mappe la tension de la batterie (3.2V-4.2V) à un pourcentage (0-100%)
+  // map(valeur, min_entree, max_entree, min_sortie, max_sortie)
+  int percentage = map(battery_voltage, 3200, 4200, 0, 100);
+  return constrain(percentage, 0, 100); // S'assure que la valeur reste entre 0 et 100
+}
+/**
  * @brief Initializes all subsystems.
  */
 void setup() {
+  // Ajout d'un délai fixe pour garantir que le moniteur série a le temps de se connecter.
+  delay(2000);
+
   Serial.begin(115200);
+  // Attend que le port série soit connecté. Indispensable pour l'ESP32-S3 avec USB natif.
+  // Ajout d'un timeout pour ne pas bloquer si le moniteur n'est pas ouvert.
+  unsigned long start_time = millis();
+  while (!Serial && (millis() - start_time < 2000)) {
+    delay(100);
+  }
+
   Serial.println("Booting Dual Display Firmware...");
+  Serial.flush(); // Force l'envoi des données
+  // Initialise la broche de la LED comme une sortie
+  pinMode(LED_PIN, OUTPUT);
+  
 
   // Initialize LittleFS for asset loading
-  if (!LittleFS.begin()) {
-    Serial.println("FATAL: LittleFS mount failed. Halting.");
-    while (1) { delay(100); }
+  // Le 'true' en second paramètre formate le système de fichiers s'il ne peut pas être monté.
+  // C'est utile pour la première initialisation ou après une corruption.
+  if (!LittleFS.begin(true)) {
+    Serial.println("FATAL: LittleFS format/mount failed. Halting.");
+    Serial.flush();
+    // Si même le formatage échoue, il y a un problème matériel ou de configuration.
+    while (1) {
+      digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Clignotement rapide pour signaler une erreur fatale
+      delay(100);
+    }
   }
 
   sleep(1);
 
+  // --- Initialisation de l'écran et du capteur désactivée pour le débogage ---
   // Initialize displays and load graphical assets
   init_tft();
-
+  
   // Perform an initial clear of both physical screens to ensure a clean state
   clear_all_screens(TFT_BLACK);
   delay(50); // Short delay to ensure screens are cleared
-
+  
   // Show splash screen to user while the rest initializes
   show_splash_screen();
   delay(1000); // Keep splash visible for a moment
-
+  //
   // Initialize the ToF sensor (this part is slow)
   #if USE_TOF_SENSOR
     init_tof_sensor();
-    #if TOF_CALIBRATION_MODE
-      Serial.println("!!! ToF CALIBRATION MODE IS ACTIVE !!!");
-    #endif
   #endif
+  // --- Fin de la section désactivée ---
 
   Serial.println("Initialization complete. Starting main loop.");
+  Serial.flush();
 }
+
+// Forward declaration for the main application logic
+void main_loop();
 
 /**
  * @brief Main application loop.
  */
 void loop() {
+  // Call the main application logic
+  main_loop();
+}
+
+void main_loop() {
   // --- FPS Calculation ---
   frame_count++;
   unsigned long current_millis = millis();
@@ -74,7 +133,8 @@ void loop() {
     current_fps = frame_count / ((current_millis - last_fps_time) / 1000.0f);
     last_fps_time = current_millis;
     frame_count = 0;
-    Serial.printf("FPS: %.1f\n", current_fps); // Print FPS to serial log
+    Serial.printf("FPS: %.1f\n", current_fps);
+    Serial.flush();
   }
 
   // --- 1. Sensor Update ---
@@ -93,7 +153,7 @@ void loop() {
   update_eye_positions(target);
 
   // --- 3. Drawing ---
-  for (int i = 0; i < NUM_SCREEN; i++) {
+  for (int i = 0; i < NUM_EYES; i++) {
     select_screen(i);
     clear_buffer(TFT_BLACK);
 
@@ -118,7 +178,11 @@ void loop() {
         char fps_str[10];
         dtostrf(current_fps, 4, 1, fps_str); // Format float to string (width 4, 1 decimal)
         char display_str[15];
-        sprintf(display_str, "FPS: %s", fps_str);
+
+        // --- Draw Battery Level ---
+        int batt_level = get_battery_percentage();
+
+        sprintf(display_str, "FPS:%s B:%d%%", fps_str, batt_level);
         drawString_fb(display_str, 5, 5, TFT_WHITE);
       }
     #endif

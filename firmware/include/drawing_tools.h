@@ -20,10 +20,6 @@
 #ifndef _DRAWING_TOOLSH_
 #define _DRAWING_TOOLSH_
 
-
-
-#define NUM_SCREEN 2
-
 #define SCR_WD   240
 #define SCR_HT   240
 
@@ -41,17 +37,17 @@ struct EyeState {
     bool was_tracking;  // True if the eye was tracking on the previous frame
 };
 // Declare the global eye state array; it will be defined in the main .ino file.
-extern EyeState eyes[NUM_SCREEN];
+extern EyeState eyes[NUM_EYES];
 
 // A struct to hold per-screen configuration.
 struct Screen {
   int16_t CS; // Chip select pin
 };
 // Declare the screens array as an external variable; it will be defined in drawing_tools.cpp
-extern Screen screens[NUM_SCREEN];
+extern Screen screens[NUM_EYES];
 
 // Make framebuffers accessible to other files
-extern uint16_t* framebuffers[NUM_SCREEN];
+extern uint16_t* framebuffers[NUM_EYES];
 
 // --- Eye Asset Management ---
 // Enum to identify different eye image types
