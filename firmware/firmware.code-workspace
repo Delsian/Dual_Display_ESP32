@@ -1,0 +1,148 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "extensions": {
+        // See http://go.microsoft.com/fwlink/?LinkId=827846
+        // for the documentation about the extensions.json format
+        "recommendations": [
+            "platformio.platformio-ide"
+        ],
+        "unwantedRecommendations": [
+            "ms-vscode.cpptools-extension-pack",
+            "pioarduino.pioarduino-ide"
+        ]
+    },
+    "settings": {
+        "ninja": "ninja",
+
+        "cmake.configureOnOpen": false,
+
+        "armToolchainPath": "${env:GNUARMEMB_TOOLCHAIN_PATH}",
+        "toolchainBinDir": "/home/eug/.platformio/packages/toolchain-xtensa-esp32s3/bin",
+
+        // The number of spaces a tab is equal to. This setting is overridden
+        // based on the file contents when `editor.detectIndentation` is true.
+        "editor.tabSize": 4,
+
+        // Insert spaces when pressing Tab. This setting is overriden
+        // based on the file contents when `editor.detectIndentation` is true.
+        "editor.insertSpaces": true,
+
+        // When opening a file, `editor.tabSize` and `editor.insertSpaces`
+        // will be detected based on the file contents. Set to false to keep
+        // the values you've explicitly set, above.
+        "editor.detectIndentation": false,
+        "editor.rulers": [80, 120],
+        "editor.cursorBlinking": "smooth",
+
+        "files.trimFinalNewlines": true,
+        "files.trimTrailingWhitespace": true,
+        "files.autoSave": "afterDelay",
+        "files.autoSaveDelay": 3000,
+
+        "editor.formatOnSave": false,
+        "editor.codeActionsOnSave": [],
+
+        "editor.renderWhitespace": "all",
+        "files.watcherExclude": {
+            "**/.git/objects/**": true,
+            "**/.git/subtree-cache/**": true,
+            "**/node_modules/**": true,
+            "**/tmp/**": true,
+            "**/.git": true,
+            "**/.svn": true,
+            "**/.hg": true,
+            "**/CVS": true,
+            "**/.DS_Store": true,
+            "**/node_modules": true,
+            "**/bower_components": true,
+            "**/dist/**": true,
+            "**/log/**": true,
+            "**/logs/**": true,
+            "**/.fdk/**": true,
+            "**/.west/**": true,
+            "**/.vscode/**": true,
+            "${workspaceRoot}/../zephyr/**": true,
+            "**/.history/**": true
+        },
+        "files.exclude": {
+            "**/.git/objects/**": true,
+            "**/.git/subtree-cache/**": true,
+            "**/node_modules/**": true,
+            "**/tmp/**": true,
+            "**/.git": true,
+            "**/.svn": true,
+            "**/.hg": true,
+            "**/CVS": true,
+            "**/.DS_Store": true,
+            "**/node_modules": true,
+            "**/bower_components": true,
+            "**/dist/**": true,
+            "**/log/**": true,
+            "**/.fdk/**": true,
+            "**/.west/**": true
+        },
+        "search.exclude": {
+            "**/.git/objects/**": true,
+            "**/.git/subtree-cache/**": true,
+            "**/node_modules/**": true,
+            "**/tmp/**": true,
+            "**/.git": true,
+            "**/.svn": true,
+            "**/.hg": true,
+            "**/CVS": true,
+            "**/.DS_Store": true,
+            "**/node_modules": true,
+            "**/bower_components": true,
+            "**/dist/**": true,
+            "**/log/**": true,
+            "**/.west/**": true,
+            "**/.history/**": true
+        }
+    },
+    "tasks": {
+        "version": "2.0.0",
+        "tasks": [
+        ]
+    },
+    "launch": {
+        "version": "0.2.0",
+        "configurations": [
+            {
+                "type": "platformio-debug",
+                "request": "launch",
+                "name": "PIO Debug",
+                "executable": "${workspaceFolder}/.pio/build/esp32-s3-dualeye-touch-lcd-1_28/firmware.elf",
+                "projectEnvName": "esp32-s3-dualeye-touch-lcd-1_28",
+                "toolchainBinDir": "${config:toolchainBinDir}",
+                "internalConsoleOptions": "openOnSessionStart",
+                "preLaunchTask": {
+                    "type": "PlatformIO",
+                    "task": "Pre-Debug"
+                }
+            },
+            {
+                "type": "platformio-debug",
+                "request": "launch",
+                "name": "PIO Debug (skip Pre-Debug)",
+                "executable": "${workspaceFolder}/.pio/build/esp32-s3-dualeye-touch-lcd-1_28/firmware.elf",
+                "projectEnvName": "esp32-s3-dualeye-touch-lcd-1_28",
+                "toolchainBinDir": "${config:toolchainBinDir}",
+                "internalConsoleOptions": "openOnSessionStart"
+            },
+            {
+                "type": "platformio-debug",
+                "request": "launch",
+                "name": "PIO Debug (without uploading)",
+                "executable": "${workspaceFolder}/.pio/build/esp32-s3-dualeye-touch-lcd-1_28/firmware.elf",
+                "projectEnvName": "esp32-s3-dualeye-touch-lcd-1_28",
+                "toolchainBinDir": "${config:toolchainBinDir}",
+                "internalConsoleOptions": "openOnSessionStart",
+                "loadMode": "manual"
+            }
+        ]
+    }
+}
