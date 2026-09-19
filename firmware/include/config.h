@@ -17,12 +17,22 @@
 #define PIN_CS2 TFT_CS_R // Chip-select for screen 2
 
 // --- ToF Sensor (VL53L5CX) Configuration ---
+#ifdef BOARD_WAVESHARE_DUALEYE
+#define USE_TOF_SENSOR 1
+#else
 #define USE_TOF_SENSOR 0 // Set to 1 to enable the ToF sensor, 0 to disable it.
+#endif
 #define TOF_CALIBRATION_MODE 0 // Set to 1 to simulate sensor data for debugging.
-#define SHOW_TOF_DEBUG_GRID 1 // Set to 1 to display the debug grid, 0 to hide it
+#define SHOW_TOF_DEBUG_GRID 0 // Set to 1 to display the debug grid, 0 to hide it
 
+#ifdef BOARD_WAVESHARE_DUALEYE
+// LCD1 connector pins 8 (SCL) and 7 (SDA); GPIO8 is the right LCD reset.
+#define PIN_TOF_SCL 10
+#define PIN_TOF_SDA 11
+#else
 #define PIN_TOF_SCL 8
 #define PIN_TOF_SDA 18
+#endif
 #define PIN_TOF_INT -1
 
 // --- Nombre d'écrans (yeux) ---

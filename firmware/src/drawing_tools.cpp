@@ -270,6 +270,38 @@ void init_tft() {
   screens[EYE_RIGHT].CS = PIN_CS2;
   pinMode(screens[EYE_LEFT].CS, OUTPUT);
   pinMode(screens[EYE_RIGHT].CS, OUTPUT);
+
+#ifdef BOARD_WAVESHARE_DUALEYE
+  digitalWrite(screens[EYE_LEFT].CS, HIGH);
+  digitalWrite(screens[EYE_RIGHT].CS, HIGH);
+  log_tft_setup();
+
+  const int reset_pins[2] = {TFT_RST_L, TFT_RST_R};
+  const int backlight_pins[2] = {TFT_BL, TFT_BL_R};
+  for (int i = 0; i < NUM_EYES; i++) {
+    // Keep both panels deselected while pulsing the selected panel's reset.
+    pinMode(reset_pins[i], OUTPUT);
+    digitalWrite(reset_pins[i], HIGH);
+    delay(5);
+    digitalWrite(reset_pins[i], LOW);
+    delay(20);
+    digitalWrite(reset_pins[i], HIGH);
+    delay(150);
+
+    Serial.printf("LCD%d: CS=%d RESET=%d BL=%d; sending initialization\n",
+                  i + 1, screens[i].CS, reset_pins[i], backlight_pins[i]);
+    select_screen(i);
+    // TFT_RST=-1 makes the library software-reset only the selected panel.
+    tft.init();
+    // LCD2 is mounted 180 degrees relative to LCD1 on the DualEye board.
+    tft.setRotation(i == EYE_RIGHT ? 2 : 0);
+    tft.fillScreen(TFT_BLACK);
+    pinMode(backlight_pins[i], OUTPUT);
+    digitalWrite(backlight_pins[i], TFT_BACKLIGHT_ON);
+    digitalWrite(screens[i].CS, HIGH);
+  }
+
+#else
   
   // Select both screens for simultaneous initialization
   digitalWrite(screens[EYE_LEFT].CS, LOW);
@@ -281,9 +313,24 @@ void init_tft() {
 
   
   Serial.print("call tft.init ");
+#ifdef TFT_RST_R
+  // The DualEye board has a separate reset line for the second display.
+  pinMode(TFT_RST_R, OUTPUT);
+  digitalWrite(TFT_RST_R, HIGH);
+  delay(5);
+  digitalWrite(TFT_RST_R, LOW);
+  delay(20);
+  digitalWrite(TFT_RST_R, HIGH);
+  delay(150);
+#endif
   tft.init();
+#ifdef TFT_BL_R
+  pinMode(TFT_BL_R, OUTPUT);
+  digitalWrite(TFT_BL_R, TFT_BACKLIGHT_ON);
+#endif
   Serial.print("call setRotation ");
   tft.setRotation(0); // Set rotation to 0 degrees to correct inverted display
+#endif
   
   digitalWrite(screens[EYE_LEFT].CS, HIGH);
   digitalWrite(screens[EYE_RIGHT].CS, HIGH);
