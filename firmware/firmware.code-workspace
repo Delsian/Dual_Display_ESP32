@@ -108,6 +108,13 @@
         "tasks": [
             {
                 "label": "Build and Flash",
+                "dependsOrder": "sequence",
+                "dependsOn": ["Build and Flash: Upload", "PlatformIO: Monitor"],
+                "group": "build",
+                "problemMatcher": []
+            },
+            {
+                "label": "Build and Flash: Upload",
                 "type": "process",
                 "command": "${env:HOME}/.platformio/penv/bin/pio",
                 "args": [
@@ -118,8 +125,20 @@
                 "options": {
                     "cwd": "${workspaceFolder}"
                 },
-                "group": "build",
                 "problemMatcher": ["$gcc"]
+            },
+            {
+                "label": "PlatformIO: Monitor",
+                "type": "process",
+                "command": "${env:HOME}/.platformio/penv/bin/pio",
+                "args": [
+                    "device", "monitor",
+                    "-e", "esp32-s3-dualeye-touch-lcd-1_28"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                },
+                "problemMatcher": []
             }
         ]
     },

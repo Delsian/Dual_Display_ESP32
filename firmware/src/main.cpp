@@ -19,6 +19,7 @@
 #include "eye_logic.h"
 #include "tof_sensor.h"
 #include "audio.h"
+#include "wifi_setup.h"
 
 // --- FPS Counter Variables ---
 // --- LED Blink Configuration ---
@@ -130,6 +131,8 @@ void setup() {
     }
   #endif
 
+  init_wifi();
+
   Serial.println("Initialization complete. Starting main loop.");
   Serial.flush();
 }
@@ -154,8 +157,6 @@ void main_loop() {
     current_fps = frame_count / ((current_millis - last_fps_time) / 1000.0f);
     last_fps_time = current_millis;
     frame_count = 0;
-    Serial.printf("FPS: %.1f\n", current_fps);
-    Serial.flush();
   }
 
   // --- 1. Sensor Update ---
@@ -177,6 +178,8 @@ void main_loop() {
   for (int i = 0; i < NUM_EYES; i++) {
     select_screen(i);
     clear_buffer(TFT_BLACK);
+
+    if (i == EYE_RIGHT && draw_wifi_setup()) continue;
 
     // Get the final calculated position and image type for the current eye
     EyePosition pos = get_eye_position(i);
