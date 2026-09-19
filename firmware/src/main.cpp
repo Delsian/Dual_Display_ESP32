@@ -21,10 +21,20 @@
 
 // --- FPS Counter Variables ---
 // --- LED Blink Configuration ---
+#ifdef BOARD_WAVESHARE_DUALEYE
+#define LED_PIN -1 // No user LED; GPIO48 is the left LCD reset.
+#else
 #define LED_PIN 48 // Broche de la LED intégrée. Changez-la si nécessaire (ex: LED_BUILTIN, 2, etc.)
+#endif
 
 // --- Battery Monitoring ---
+#ifdef BOARD_WAVESHARE_DUALEYE
+#define BATT_ADC_PIN 1
+#define BATT_DIVIDER_RATIO 3.0f // 200K / 100K divider.
+#else
 #define BATT_ADC_PIN 4 // Broche ADC pour la lecture de la tension de la batterie
+#define BATT_DIVIDER_RATIO 2.0f
+#endif
 
 
 // --- FPS Counter Variables ---
@@ -47,8 +57,8 @@ int get_battery_percentage() {
   // La référence de tension est d'environ 3.3V (3300mV) pour une lecture max de 4095
   float adc_voltage = (raw_value / 4095.0) * 3300.0;
 
-  // La tension de la batterie est le double de la tension lue à cause du diviseur de tension
-  float battery_voltage = adc_voltage * 2.0;
+  // Account for the board's battery voltage divider.
+  float battery_voltage = adc_voltage * BATT_DIVIDER_RATIO;
 
   // Mappe la tension de la batterie (3.2V-4.2V) à un pourcentage (0-100%)
   // map(valeur, min_entree, max_entree, min_sortie, max_sortie)
@@ -73,7 +83,9 @@ void setup() {
   Serial.println("Booting Dual Display Firmware...");
   Serial.flush(); // Force l'envoi des données
   // Initialise la broche de la LED comme une sortie
-  pinMode(LED_PIN, OUTPUT);
+  #if LED_PIN >= 0
+    pinMode(LED_PIN, OUTPUT);
+  #endif
   
 
   // Initialize LittleFS for asset loading
@@ -84,7 +96,9 @@ void setup() {
     Serial.flush();
     // Si même le formatage échoue, il y a un problème matériel ou de configuration.
     while (1) {
-      digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Clignotement rapide pour signaler une erreur fatale
+      #if LED_PIN >= 0
+        digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Clignotement rapide pour signaler une erreur fatale
+      #endif
       delay(100);
     }
   }
