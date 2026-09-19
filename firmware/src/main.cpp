@@ -18,6 +18,7 @@
 #include "drawing_tools.h"
 #include "eye_logic.h"
 #include "tof_sensor.h"
+#include "audio.h"
 
 // --- FPS Counter Variables ---
 // --- LED Blink Configuration ---
@@ -122,6 +123,12 @@ void setup() {
     init_tof_sensor();
   #endif
   // --- Fin de la section désactivée ---
+
+  #if USE_AUDIO
+    if (!init_audio()) {
+      Serial.println("Audio unavailable; continuing without recording/playback.");
+    }
+  #endif
 
   Serial.println("Initialization complete. Starting main loop.");
   Serial.flush();

@@ -16,6 +16,24 @@
 #define PIN_CS1 TFT_CS_L // Chip-select for screen 1
 #define PIN_CS2 TFT_CS_R // Chip-select for screen 2
 
+// --- Onboard audio (Waveshare DualEye) ---
+#ifdef BOARD_WAVESHARE_DUALEYE
+#define USE_AUDIO 1
+#define PIN_KEY1 0 // Active low, also the boot button.
+#define PIN_AUDIO_SDA 11
+#define PIN_AUDIO_SCL 10
+#define PIN_AUDIO_MCLK 12
+#define PIN_AUDIO_BCLK 13
+#define PIN_AUDIO_LRCK 14
+#define PIN_AUDIO_DIN 15 // ES7210 microphone data into ESP32.
+#define PIN_AUDIO_DOUT 16 // ESP32 data to ES8311 speaker codec.
+#define PIN_AUDIO_PA 9
+#else
+#define USE_AUDIO 0
+#endif
+#define AUDIO_RECORD_SECONDS 30 // PSRAM: 64 KB per second, stereo 16-bit PCM.
+#define AUDIO_OUTPUT_VOLUME 75 // ES8311 volume, 0..100.
+
 // --- ToF Sensor (VL53L5CX) Configuration ---
 #ifdef BOARD_WAVESHARE_DUALEYE
 #define USE_TOF_SENSOR 1
