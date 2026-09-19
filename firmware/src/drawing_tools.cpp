@@ -231,7 +231,7 @@ bool load_specific_eye_image(const char* filename, int16_t width, int16_t height
 void init_text_sprite() {
     spr.setTextFont(2);
     spr.setColorDepth(16);
-    spr.createSprite(80, 16); // Large enough for "FPS: 99.9"
+    spr.createSprite(200, 16); // Also fits Wi-Fi setup instructions.
     spr.setTextDatum(TL_DATUM);
 }
 
