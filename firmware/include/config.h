@@ -60,8 +60,8 @@
 #endif
 #define PIN_TOF_INT -1
 
-// --- Nombre d'écrans (yeux) ---
-#define NUM_EYES 2 // Mettre à 1 pour un seul oeil, 2 pour deux yeux
+// --- Number of displays (eyes) ---
+#define NUM_EYES 2 // Set to 1 for one eye, 2 for two eyes
 
 // --- Display & Image Configuration ---
 #define SCR_WD 240 // Screen width in pixels

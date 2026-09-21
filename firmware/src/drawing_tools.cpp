@@ -154,7 +154,7 @@ void display_all_buffers() {
  */
 void precalculate_scanlines() {
 #if DRAW_AREA_SQUARE
-    // Configuration pour une zone de dessin carrée (tout l'écran)
+    // Configure a square drawing area (the entire screen)
     for (int16_t y = 0; y < SCR_HT; y++) {
         circular_scanlines[y].x_start = 0;
         circular_scanlines[y].x_end = SCR_WD;
@@ -472,8 +472,8 @@ void draw_tof_debug_grid(int16_t x_pos, int16_t y_pos, int16_t grid_size, const 
     uint16_t* current_buffer = framebuffers[active_screen_index];
     float cell_size = (float)grid_size / 8.0f;
 
-    const int min_dist = 10;  // Distance en mm pour le noir
-    const int max_dist = 500; // Distance en mm pour le blanc
+    const int min_dist = 10;  // Distance in mm for black
+    const int max_dist = 500; // Distance in mm for white
 
     for (int cell_y = 0; cell_y < 8; ++cell_y) {
         for (int cell_x = 0; cell_x < 8; ++cell_x) {
@@ -482,31 +482,31 @@ void draw_tof_debug_grid(int16_t x_pos, int16_t y_pos, int16_t grid_size, const 
             uint8_t status = data->target_status[zone_index];
 
             uint16_t color;
-            // Mettre en surbrillance uniquement si les coordonnées sont valides (pas -1)
+            // Highlight only when the coordinates are valid (not -1)
             if (highlight_x != -1 && cell_y == highlight_x && cell_x == highlight_y) { // Transposed check to match content drawing
-                color = swap_color_bytes(TFT_RED); // Mettre en surbrillance le pixel minimum en rouge
+                color = swap_color_bytes(TFT_RED); // Highlight the minimum-distance pixel in red
             }
             else {
-                // Mapper la distance à une intensité de 0.0 à 1.0
+                // Map the distance to an intensity from 0.0 to 1.0
                 float intensity = (float)(dist - min_dist) / (float)(max_dist - min_dist);
-                intensity = constrain(intensity, 0.0f, 1.0f); // Borner entre 0 et 1
+                intensity = constrain(intensity, 0.0f, 1.0f); // Clamp between 0 and 1
                 
-                //if (status == 5) { // Détection valide -> Nuances de gris
-                    // Convertir l'intensité en une valeur de gris 8 bits (0-255)
+                //if (status == 5) { // Valid detection -> Grayscale
+                    // Convert the intensity to an 8-bit grayscale value (0-255)
                     uint8_t gray_8bit = intensity * 255;
-                    // Convertir le gris 8 bits en couleur RGB565
-                    uint8_t r = gray_8bit >> 3; // 5 bits pour le rouge
-                    uint8_t g = gray_8bit >> 2; // 6 bits pour le vert
-                    uint8_t b = gray_8bit >> 3; // 5 bits pour le bleu
+                    // Convert 8-bit grayscale to RGB565 color
+                    uint8_t r = gray_8bit >> 3; // 5 bits for red
+                    uint8_t g = gray_8bit >> 2; // 6 bits for green
+                    uint8_t b = gray_8bit >> 3; // 5 bits for blue
                     color = swap_color_bytes((r << 11) | (g << 5) | b);
-                //} else { // Détection non valide -> Nuances de bleu
-                 //   // Utiliser l'intensité pour moduler la composante bleue
-                //    uint8_t b = (intensity * 31); // 5 bits pour le bleu (0-31)
-                //    color = swap_color_bytes(b); // Crée une couleur avec seulement du bleu
+                //} else { // Invalid detection -> Shades of blue
+                 //   // Use the intensity to modulate the blue component
+                //    uint8_t b = (intensity * 31); // 5 bits for blue (0-31)
+                //    color = swap_color_bytes(b); // Create a color using only blue
                 //}
             }
 
-            // Dessiner le rectangle pour cette cellule
+            // Draw the rectangle for this cell
             int16_t start_px = x_pos + cell_x * cell_size;
             int16_t start_py = y_pos + cell_y * cell_size;
             for (int py = start_py; py < start_py + cell_size; ++py) {
@@ -533,11 +533,11 @@ void draw_score_grid(int16_t x_pos, int16_t y_pos, int16_t grid_size, const long
     uint16_t* current_buffer = framebuffers[active_screen_index];
     float cell_size = (float)grid_size / 8.0f;
 
-    // Trouver dynamiquement le min et max score pour normaliser les couleurs
+    // Find the minimum and maximum scores dynamically to normalize the colors
     long min_score = -1;
     long max_score = 0;
     for (int i = 0; i < 64; i++) {
-        if (scores[i] >= 0) { // On ne considère que les scores valides (0 ou plus)
+        if (scores[i] >= 0) { // Consider only valid scores (0 or greater)
             if (min_score == -1 || scores[i] < min_score) {
                 min_score = scores[i];
             }
@@ -554,24 +554,24 @@ void draw_score_grid(int16_t x_pos, int16_t y_pos, int16_t grid_size, const long
 
             uint16_t color;
             if (highlight_x != -1 && cell_y == highlight_x && cell_x == highlight_y) { // Transposed check
-                color = swap_color_bytes(TFT_GREEN); // Mettre en surbrillance le pixel choisi en vert
+                color = swap_color_bytes(TFT_GREEN); // Highlight the selected pixel in green
             } else {
-                // Mapper le score à une intensité de 0.0 (bon) à 1.0 (mauvais)
+                // Map the score to an intensity from 0.0 (good) to 1.0 (bad)
                 float intensity = 0.0f;
-                if (max_score > min_score) { // Éviter la division par zéro
+                if (max_score > min_score) { // Avoid division by zero
                     intensity = (float)(score - min_score) / (float)(max_score - min_score);
                 }
-                // Les pixels de bordure (marqués avec -1) sont dessinés en noir
+                // Border pixels (marked with -1) are drawn in black
                 if (score < 0) {
-                    intensity = -1; // Marqueur pour dessiner en noir
+                    intensity = -1; // Marker for drawing in black
                 }
 
-                // Créer un dégradé de Bleu (mauvais) à Rouge (bon)
-                uint8_t r = intensity * 255; // Le rouge augmente avec l'intensité (bon score)
+                // Create a gradient from blue (bad) to red (good)
+                uint8_t r = intensity * 255; // Red increases with intensity (good score)
                 uint8_t g = 0;
-                uint8_t b = (1.0f - intensity) * 255; // Le bleu diminue avec l'intensité
+                uint8_t b = (1.0f - intensity) * 255; // Blue decreases with intensity
 
-                // Convertir en RGB565
+                // Convert to RGB565
                 if (intensity == -1) {
                     color = swap_color_bytes(TFT_BLACK);
                 } else {
@@ -579,7 +579,7 @@ void draw_score_grid(int16_t x_pos, int16_t y_pos, int16_t grid_size, const long
                 }
             }
 
-            // Dessiner le rectangle pour cette cellule
+            // Draw the rectangle for this cell
             int16_t start_px = x_pos + cell_y * cell_size; // Use cell_y for horizontal position
             int16_t start_py = y_pos + cell_x * cell_size; // Use cell_x for vertical position
             for (int py = start_py; py < start_py + cell_size; ++py) {
@@ -646,7 +646,7 @@ void show_splash_screen() {
     int16_t text_width = tft.textWidth(text, text_font);
     int16_t text_height = tft.fontHeight(text_font);
     spr.setColorDepth(16);
-    spr.setTextFont(text_font); // Définir la police avant de créer le sprite
+    spr.setTextFont(text_font); // Set the font before creating the sprite
     spr.createSprite(text_width, text_height + 4); // Add a 4-pixel margin for descenders
     spr.fillSprite(bg_color); // Clear sprite
     spr.setTextColor(text_color, bg_color);

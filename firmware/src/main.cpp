@@ -12,9 +12,9 @@
 
 #include <Arduino.h>
 #include "config.h"
-// #include "esp32-hal-log.h" // Désactivé pour le débogage
+// #include "esp32-hal-log.h" // Disabled for debugging
 #include "LittleFS.h"
-// --- Bibliothèques désactivées pour le débogage ---
+// --- Libraries disabled for debugging ---
 #include "drawing_tools.h"
 #include "eye_logic.h"
 #include "tof_sensor.h"
@@ -28,7 +28,7 @@
 #ifdef BOARD_WAVESHARE_DUALEYE
 #define LED_PIN -1 // No user LED; GPIO48 is the left LCD reset.
 #else
-#define LED_PIN 48 // Broche de la LED intégrée. Changez-la si nécessaire (ex: LED_BUILTIN, 2, etc.)
+#define LED_PIN 48 // Built-in LED pin. Change if needed (e.g., LED_BUILTIN, 2, etc.)
 #endif
 
 // --- Battery Monitoring ---
@@ -36,7 +36,7 @@
 #define BATT_ADC_PIN 1
 #define BATT_DIVIDER_RATIO 3.0f // 200K / 100K divider.
 #else
-#define BATT_ADC_PIN 4 // Broche ADC pour la lecture de la tension de la batterie
+#define BATT_ADC_PIN 4 // ADC pin for reading the battery voltage
 #define BATT_DIVIDER_RATIO 2.0f
 #endif
 
@@ -50,43 +50,43 @@ static float current_fps = 0.0f;
 // --- Debugging ---
 
 /**
- * @brief Lit la tension de la batterie et la retourne en pourcentage.
- * @return Le pourcentage de batterie restant (0-100).
+ * @brief Reads the battery voltage and returns it as a percentage.
+ * @return The remaining battery percentage (0-100).
  */
 int get_battery_percentage() {
-  // Lit la valeur brute de l'ADC (0-4095)
+  // Read the raw ADC value (0-4095)
   uint32_t raw_value = analogRead(BATT_ADC_PIN);
 
-  // Convertit la valeur brute en millivolts à la broche ADC
-  // La référence de tension est d'environ 3.3V (3300mV) pour une lecture max de 4095
+  // Convert the raw value to millivolts at the ADC pin
+  // The reference voltage is approximately 3.3V (3300mV) for a maximum reading of 4095
   float adc_voltage = (raw_value / 4095.0) * 3300.0;
 
   // Account for the board's battery voltage divider.
   float battery_voltage = adc_voltage * BATT_DIVIDER_RATIO;
 
-  // Mappe la tension de la batterie (3.2V-4.2V) à un pourcentage (0-100%)
-  // map(valeur, min_entree, max_entree, min_sortie, max_sortie)
+  // Map the battery voltage (3.2V-4.2V) to a percentage (0-100%)
+  // map(value, input_min, input_max, output_min, output_max)
   int percentage = map(battery_voltage, 3200, 4200, 0, 100);
-  return constrain(percentage, 0, 100); // S'assure que la valeur reste entre 0 et 100
+  return constrain(percentage, 0, 100); // Keep the value between 0 and 100
 }
 /**
  * @brief Initializes all subsystems.
  */
 void setup() {
-  // Ajout d'un délai fixe pour garantir que le moniteur série a le temps de se connecter.
+  // Add a fixed delay to give the serial monitor time to connect.
   delay(2000);
 
   Serial.begin(115200);
-  // Attend que le port série soit connecté. Indispensable pour l'ESP32-S3 avec USB natif.
-  // Ajout d'un timeout pour ne pas bloquer si le moniteur n'est pas ouvert.
+  // Wait for the serial port to connect. Required for the ESP32-S3 with native USB.
+  // Add a timeout to avoid blocking if the monitor is not open.
   unsigned long start_time = millis();
   while (!Serial && (millis() - start_time < 2000)) {
     delay(100);
   }
 
   Serial.println("Booting " PROJECT_NAME " Firmware...");
-  Serial.flush(); // Force l'envoi des données
-  // Initialise la broche de la LED comme une sortie
+  Serial.flush(); // Flush outgoing data
+  // Initialize the LED pin as an output
   #if LED_PIN >= 0
     pinMode(LED_PIN, OUTPUT);
   #endif
@@ -96,10 +96,10 @@ void setup() {
   if (!LittleFS.begin(false)) {
     Serial.println("FATAL: LittleFS mount failed. Upload filesystem image. Halting.");
     Serial.flush();
-    // Si même le formatage échoue, il y a un problème matériel ou de configuration.
+    // If even formatting fails, there is a hardware or configuration problem.
     while (1) {
       #if LED_PIN >= 0
-        digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Clignotement rapide pour signaler une erreur fatale
+        digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Blink rapidly to signal a fatal error
       #endif
       delay(100);
     }
@@ -108,7 +108,7 @@ void setup() {
   load_device_config();
   sleep(1);
 
-  // --- Initialisation de l'écran et du capteur désactivée pour le débogage ---
+  // --- Display and sensor initialization disabled for debugging ---
   // Initialize displays and load graphical assets
   init_tft();
   
@@ -124,7 +124,7 @@ void setup() {
   #if USE_TOF_SENSOR
     init_tof_sensor();
   #endif
-  // --- Fin de la section désactivée ---
+  // --- End of disabled section ---
 
   #if USE_AUDIO
     if (!init_audio()) {

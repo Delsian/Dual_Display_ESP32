@@ -11,8 +11,8 @@
  */
 #include "tof_sensor.h"
 #include <Wire.h>
-#include <cmath> // Pour fabsf
-#include "config.h" // Pour accéder à USE_TOF_SENSOR
+#include <cmath> // For fabsf
+#include "config.h" // For access to USE_TOF_SENSOR
 #if USE_TOF_SENSOR
 
 // --- ToF Sensor State (private to this file) ---
@@ -36,7 +36,7 @@ void init_tof_sensor() {
     ESP.restart();
   }
 
-  myImager.setResolution(8 * 8); // 64 zones de mesure
+  myImager.setResolution(8 * 8); // 64 measurement zones
   myImager.setRangingFrequency(15); // 15 Hz
   myImager.startRanging();
 
