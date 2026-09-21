@@ -1,7 +1,7 @@
 /**
- * @file Dual_Display_Firmware.ino
+ * @file main.cpp
  * @author Intellar (https://github.com/intellar)
- * @brief Main firmware for the dual-display animated eye project.
+ * @brief Main firmware for the Parrot animated eye project.
  * @version 1.1
  *
  * @copyright Copyright (c) 2024
@@ -20,6 +20,8 @@
 #include "tof_sensor.h"
 #include "audio.h"
 #include "wifi_setup.h"
+#include "device_config.h"
+#include "ble_config.h"
 
 // --- FPS Counter Variables ---
 // --- LED Blink Configuration ---
@@ -82,7 +84,7 @@ void setup() {
     delay(100);
   }
 
-  Serial.println("Booting Dual Display Firmware...");
+  Serial.println("Booting " PROJECT_NAME " Firmware...");
   Serial.flush(); // Force l'envoi des données
   // Initialise la broche de la LED comme une sortie
   #if LED_PIN >= 0
@@ -90,11 +92,9 @@ void setup() {
   #endif
   
 
-  // Initialize LittleFS for asset loading
-  // Le 'true' en second paramètre formate le système de fichiers s'il ne peut pas être monté.
-  // C'est utile pour la première initialisation ou après une corruption.
-  if (!LittleFS.begin(true)) {
-    Serial.println("FATAL: LittleFS format/mount failed. Halting.");
+  // Preserve configuration and assets if mounting fails; never auto-format.
+  if (!LittleFS.begin(false)) {
+    Serial.println("FATAL: LittleFS mount failed. Upload filesystem image. Halting.");
     Serial.flush();
     // Si même le formatage échoue, il y a un problème matériel ou de configuration.
     while (1) {
@@ -105,6 +105,7 @@ void setup() {
     }
   }
 
+  load_device_config();
   sleep(1);
 
   // --- Initialisation de l'écran et du capteur désactivée pour le débogage ---
@@ -132,6 +133,7 @@ void setup() {
   #endif
 
   init_wifi();
+  init_ble_config();
 
   Serial.println("Initialization complete. Starting main loop.");
   Serial.flush();
@@ -179,14 +181,14 @@ void main_loop() {
     select_screen(i);
     clear_buffer(TFT_BLACK);
 
+    if (i == EYE_LEFT && draw_ble_pairing()) continue;
     if (i == EYE_RIGHT && draw_wifi_setup()) continue;
 
-    // Get the final calculated position and image type for the current eye
+    // Get the final calculated position for the current eye
     EyePosition pos = get_eye_position(i);
-    EyeImageType image_type = get_current_eye_image_type(target);
 
     // Draw the eye at its final calculated position
-    draw_eye_at_target(pos.x, pos.y, 0, image_type); // 0 = eyelid open
+    draw_eye_at_target(pos.x, pos.y, 0); // 0 = eyelid open
 
     // Optional: Draw the ToF debug grid on one of the screens
     #if USE_TOF_SENSOR && SHOW_TOF_DEBUG_GRID

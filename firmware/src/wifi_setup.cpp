@@ -5,6 +5,7 @@
 #include "config.h"
 #include "drawing_tools.h"
 #include "wifi_setup.h"
+#include "device_config.h"
 
 namespace {
 std::atomic<bool> portal_active{false};
@@ -26,24 +27,25 @@ void report_access_point() {
 }
 
 void wifi_task(void *) {
+  const DeviceConfig &config = device_config();
   WiFiManager manager;
   // Report AP startup failures without verbose credential logging.
   manager.setDebugOutput(true, WM_DEBUG_ERROR);
   manager.setConfigPortalBlocking(false);
-  manager.setConfigPortalTimeout(WIFI_PORTAL_TIMEOUT_SECONDS);
-  manager.setConnectTimeout(WIFI_CONNECT_TIMEOUT_SECONDS);
-  manager.setSaveConnectTimeout(WIFI_CONNECT_TIMEOUT_SECONDS);
+  manager.setConfigPortalTimeout(config.wifi_setup_timeout_seconds);
+  manager.setConnectTimeout(config.wifi_connect_timeout_seconds);
+  manager.setSaveConnectTimeout(config.wifi_connect_timeout_seconds);
   manager.setAPClientCheck(false);
   manager.setWebPortalClientCheck(false);
   manager.setShowPassword(false);
   const char *menu[] = {"wifi", "exit"};
   manager.setMenu(menu, 2);
-  manager.setTitle("DualEye Wi-Fi setup");
+  manager.setTitle(PROJECT_NAME " Wi-Fi setup");
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   const uint64_t mac = ESP.getEfuseMac();
-  snprintf(ap_name, sizeof(ap_name), "DualEye-%06lX", (unsigned long)(mac & 0xffffff));
+  snprintf(ap_name, sizeof(ap_name), PROJECT_NAME "-%06lX", (unsigned long)(mac & 0xffffff));
 
   auto start_portal = [&]() {
     if (manager.getConfigPortalActive()) {
@@ -61,10 +63,30 @@ void wifi_task(void *) {
     }
   };
 
-  bool startup_pending = manager.getWiFiIsSaved();
-  if (startup_pending) WiFi.begin(); // Load credentials from ESP32 NVS.
-  else start_portal();
-  const unsigned long startup_time = millis();
+  String saved_ssid = manager.getWiFiSSID();
+  String saved_password = manager.getWiFiPass();
+  unsigned next_network = 0;
+  unsigned long attempt_time = 0;
+  auto try_next_network = [&]() -> bool {
+    const unsigned count = config.wifi_network_count + (saved_ssid.length() ? 1 : 0);
+    if (next_network >= count) return false;
+    const bool from_json = next_network < config.wifi_network_count;
+    const char *ssid = from_json ? config.wifi_networks[next_network].ssid.c_str() : saved_ssid.c_str();
+    const char *password = from_json ? config.wifi_networks[next_network].password.c_str() : saved_password.c_str();
+    ++next_network;
+    WiFi.persistent(false); // Trying JSON entries must not overwrite portal credentials in NVS.
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+    attempt_time = millis();
+    Serial.printf("Wi-Fi: trying network %u of %u.\n", next_network, count);
+    return true;
+  };
+  bool startup_pending = true;
+  bool connection_pending = try_next_network();
+  if (!connection_pending) {
+    startup_pending = false;
+    start_portal();
+  }
   unsigned long last_retry = millis();
   bool was_connected = false;
   char command[16] = {};
@@ -80,6 +102,7 @@ void wifi_task(void *) {
         command[command_length] = '\0';
         if (!command_overflow && strcmp(command, "wifi") == 0) {
           startup_pending = false;
+          connection_pending = false;
           start_portal();
         }
         command_length = 0;
@@ -96,6 +119,8 @@ void wifi_task(void *) {
     if (portal_active.exchange(active) && !active) {
       Serial.println("Wi-Fi setup closed. Send wifi to reopen.");
       last_retry = millis();
+      saved_ssid = manager.getWiFiSSID();
+      saved_password = manager.getWiFiPass();
     }
     const bool connected = WiFi.status() == WL_CONNECTED;
     if (connected != was_connected) {
@@ -103,17 +128,24 @@ void wifi_task(void *) {
       else Serial.println("Wi-Fi disconnected; reconnecting in background.");
       was_connected = connected;
     }
-    if (startup_pending) {
-      if (connected) startup_pending = false;
-      else if (millis() - startup_time >= WIFI_CONNECT_TIMEOUT_SECONDS * 1000UL) {
+    if (connected) {
+      startup_pending = false;
+      connection_pending = false;
+    }
+    if (connection_pending && !manager.getConfigPortalActive() &&
+        millis() - attempt_time >= config.wifi_connect_timeout_seconds * 1000UL) {
+      connection_pending = try_next_network();
+      if (!connection_pending) {
+        last_retry = millis();
+        if (startup_pending) start_portal();
         startup_pending = false;
-        start_portal();
       }
     }
-    if (!manager.getConfigPortalActive() && !startup_pending && !connected &&
-        millis() - last_retry >= WIFI_RETRY_INTERVAL_MS) {
+    if (!manager.getConfigPortalActive() && !connection_pending && !connected &&
+        millis() - last_retry >= config.wifi_retry_interval_ms) {
       last_retry = millis();
-      if (manager.getWiFiIsSaved()) WiFi.reconnect();
+      next_network = 0;
+      connection_pending = try_next_network();
     }
     vTaskDelay(pdMS_TO_TICKS(20));
   }

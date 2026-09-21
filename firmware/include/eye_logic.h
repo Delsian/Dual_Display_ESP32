@@ -13,7 +13,6 @@
 #define EYE_LOGIC_H
 
 #include "tof_sensor.h" // For TofTarget
-#include "drawing_tools.h" // For EyeImageType
 
 // State for a single eye's logical position
 struct EyePosition {
@@ -29,8 +28,5 @@ void update_eye_positions(const TofTarget& target);
 
 // Gets the current calculated position of a specific eye
 EyePosition get_eye_position(int eye_index);
-
-// Determines which eye image to use based on the target's validity
-EyeImageType get_current_eye_image_type(const TofTarget& target);
 
 #endif // EYE_LOGIC_H

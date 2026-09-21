@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "audio_volume": 75,
+  "wifi_setup_timeout_seconds": 180,
+  "wifi_connect_timeout_seconds": 20,
+  "wifi_retry_interval_ms": 30000,
+  "wifi_networks": []
+}

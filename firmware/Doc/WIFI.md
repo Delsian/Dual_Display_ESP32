@@ -1,6 +1,6 @@
 # Wi-Fi setup
 
-On first boot, the right display shows an open `DualEye-XXXXXX` setup network.
+On first boot, the right display shows an open `Parrot-XXXXXX` setup network.
 No password is required to join it. The left eye continues animating. The same instructions are
 printed on the USB serial monitor at 115200 baud.
 
@@ -13,9 +13,10 @@ printed on the USB serial monitor at 115200 baud.
    resume. Your phone can reconnect to its usual network. The device prints
    its assigned IP address on serial.
 
-Credentials are stored in ESP32 NVS and reused after power cycling. If the
-saved network cannot be reached within 20 seconds at startup, setup opens
-again. Setup closes after approximately three minutes, including when a phone
+Portal credentials are stored in ESP32 NVS and reused after power cycling.
+Optional `wifi_networks` entries in `/config.json` are tried in order before
+the NVS network, with a default 20-second timeout per network. If all attempts
+fail at startup, setup opens again. Setup closes after approximately three minutes, including when a phone
 is attached; an in-progress connection attempt can delay closure briefly.
 An incorrect password leaves the portal available for another attempt until
 timeout. Submitted credentials replace the previously saved credentials.
@@ -25,11 +26,13 @@ on the serial monitor (enable LF or CRLF line endings). KEY1 retains its audio
 recording function. Without serial access, restart the device while its saved
 network is unavailable to reopen setup.
 
-After setup closes, the device retries a saved network every 30 seconds while
-offline. A later router outage does not automatically reopen setup. Animation
+After setup closes, the device retries the configured networks and NVS fallback
+while offline, waiting 30 seconds between failed cycles by default.
+A later router outage does not automatically reopen setup. Animation
 and sensor processing continue independently of the network task.
 
-Timeouts are configurable in `include/config.h`. The WiFiManager dependency is
+Timeouts are configurable in LittleFS `/config.json`; see [configuration](CONFIG.md).
+Defaults are defined in `include/config.h`. The WiFiManager dependency is
 pinned to 2.0.17 in each enabled PlatformIO environment. Networking runs in a
 separate FreeRTOS task because WiFiManager can wait during scans and credential
 submission even with its nonblocking portal option enabled.

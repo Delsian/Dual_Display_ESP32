@@ -338,8 +338,7 @@ void init_tft() {
   precalculate_scanlines(); // Fill our circular screen map
 
   // Load eye image from LittleFS
-  load_specific_eye_image(EYE_IMAGE_NORMAL_PATH, EYE_IMAGE_WIDTH, EYE_IMAGE_HEIGHT, &eye_texture.buffers[EYE_IMAGE_NORMAL]);
-  load_specific_eye_image(EYE_IMAGE_BAD_PATH, EYE_IMAGE_WIDTH, EYE_IMAGE_HEIGHT, &eye_texture.buffers[EYE_IMAGE_BAD]);
+  load_specific_eye_image(EYE_IMAGE_NORMAL_PATH, EYE_IMAGE_WIDTH, EYE_IMAGE_HEIGHT, &eye_texture.buffer);
 
   init_text_sprite();
 }
@@ -355,11 +354,10 @@ void init_tft() {
  * @param x_pos The x-coordinate of the top-left of the image.
  * @param y_pos The y-coordinate of the top-left of the image.
  * @param eyelid_level The current level of the eyelid (0=open).
- * @param image_type The type of eye image to draw (normal or bad).
  */
-void draw_eye_image(int16_t x_pos, int16_t y_pos, uint8_t eyelid_level, EyeImageType image_type) {
+void draw_eye_image(int16_t x_pos, int16_t y_pos, uint8_t eyelid_level) {
   // If the image buffer has not been loaded, do nothing.
-  if (!eye_texture.buffers[image_type]) {
+  if (!eye_texture.buffer) {
     return;
   }
 
@@ -397,7 +395,7 @@ void draw_eye_image(int16_t x_pos, int16_t y_pos, uint8_t eyelid_level, EyeImage
     int16_t x_end_draw = min(x_end_visible, (int16_t)(x_pos + scaled_width));
 
     int16_t src_y = src_y_accum >> 16;
-    uint16_t* source_line = &eye_texture.buffers[image_type][src_y * EYE_IMAGE_WIDTH]; // Calculate source line address once
+    uint16_t* source_line = &eye_texture.buffer[src_y * EYE_IMAGE_WIDTH]; // Calculate source line address once
     uint16_t* framebuffer_line = &framebuffers[active_screen_index][(dest_y * SCR_WD)];
     
     // Initialize the X accumulator for the first visible coordinate
@@ -427,13 +425,12 @@ void draw_eye_image(int16_t x_pos, int16_t y_pos, uint8_t eyelid_level, EyeImage
  * @param target_x The horizontal target, from -1.0 (left) to 1.0 (right).
  * @param target_y The vertical target, from -1.0 (up) to 1.0 (down).
  * @param eyelid_level The current level of the eyelid (0=open).
- * @param image_type The type of eye image to draw (normal or bad).
  */
-void draw_eye_at_target(float target_x, float target_y, uint8_t eyelid_level, EyeImageType image_type) {
+void draw_eye_at_target(float target_x, float target_y, uint8_t eyelid_level) {
     // Calculate the final pixel offset based on the normalized target coordinates
     int16_t x_offset = target_x * MAX_2D_OFFSET_PIXELS;
     int16_t y_offset = target_y * MAX_2D_OFFSET_PIXELS;
-    draw_eye_image(RESTING_2D_OFFSET_PIXELS + x_offset, RESTING_2D_OFFSET_PIXELS + y_offset, eyelid_level, image_type);
+    draw_eye_image(RESTING_2D_OFFSET_PIXELS + x_offset, RESTING_2D_OFFSET_PIXELS + y_offset, eyelid_level);
 }
 
 /**
@@ -640,8 +637,8 @@ void pushSpriteToFb(TFT_eSprite* sprite, int32_t x, int32_t y, uint16_t* framebu
  * This function is called once at startup.
  */
 void show_splash_screen() {
-    const char* text = "intellar.ca";
-    const int text_font = 4; // Use a larger font for the splash screen
+    const char* text = PROJECT_NAME;
+    const int text_font = 2; // Font enabled in the project's TFT configuration.
     const uint16_t text_color = TFT_WHITE;
     const uint16_t bg_color = TFT_BLACK;
 

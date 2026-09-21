@@ -12,6 +12,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#define PROJECT_NAME "Parrot"
+
 // --- Wi-Fi provisioning ---
 #define WIFI_PORTAL_TIMEOUT_SECONDS 180
 #define WIFI_CONNECT_TIMEOUT_SECONDS 20
@@ -71,8 +73,7 @@
 const uint16_t TRANSPARENT_COLOR_KEY = 0x0000; // The color in assets treated as transparent (black).
 
 // --- Asset File Paths ---
-static const char* EYE_IMAGE_NORMAL_PATH = "/image_giant.bin"; // Image for random/idle mode
-static const char* EYE_IMAGE_BAD_PATH = "/image_giant_bad.bin"; // Image for tracking mode
+static const char* EYE_IMAGE_NORMAL_PATH = "/image_giant.bin"; // Shared image for idle and tracking modes
 
 // --- Saccade (Eye Movement) Behavior ---
 // Controls how the eye darts around.

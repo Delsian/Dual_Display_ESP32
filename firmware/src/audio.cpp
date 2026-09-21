@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "audio.h"
 #include "config.h"
+#include "device_config.h"
 
 #if USE_AUDIO
 #include <Wire.h>
@@ -45,6 +46,7 @@ bool configure_registers(uint8_t address, const RegisterValue (&values)[N]) {
 }
 
 bool init_codecs() {
+  const uint32_t volume = device_config().audio_volume;
   // Fixed 16 kHz / 4.096 MHz MCLK setup from Waveshare's ES8311/ES7210
   // reference drivers: https://github.com/waveshareteam/ESP32-S3-DualEye-Touch-LCD-1.28
   if (!write_register(SPEAKER_ADDRESS, 0x00, 0x1f)) return false;
@@ -57,7 +59,7 @@ bool init_codecs() {
     {0x09, 0x0c}, {0x0a, 0x0c}, // Standard I2S, 16-bit.
     {0x0d, 0x01}, {0x0e, 0x02}, {0x12, 0x00}, {0x13, 0x10},
     {0x1c, 0x6a}, {0x37, 0x08}, // Analog power, DAC, bypass equalizer.
-    {0x32, AUDIO_OUTPUT_VOLUME == 0 ? 0 : AUDIO_OUTPUT_VOLUME * 256 / 100 - 1}
+    {0x32, static_cast<uint8_t>(volume == 0 ? 0 : volume * 256 / 100 - 1)}
   };
   const RegisterValue microphone[] = {
     {0x00, 0xff}, {0x00, 0x32}, // Reset.

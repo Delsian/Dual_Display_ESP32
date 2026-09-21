@@ -6,3 +6,4 @@
 
 # FreeCAD backup files
 *.FCStd.[0-9]*
+/firmware/.vscode/extensions.json

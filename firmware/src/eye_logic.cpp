@@ -82,7 +82,3 @@ EyePosition get_eye_position(int eye_index) {
     }
     return EyePosition{0.0f, 0.0f}; // Return a default/safe value by explicitly constructing it
 }
-
-EyeImageType get_current_eye_image_type(const TofTarget& target) {
-    return target.is_valid ? EYE_IMAGE_BAD : EYE_IMAGE_NORMAL;
-}
