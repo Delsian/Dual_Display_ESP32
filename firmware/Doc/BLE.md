@@ -24,6 +24,18 @@ The characteristics share the suffix `-7c8e-4c30-9aa8-45e626d39b01`:
 | `6b520004` | Result/status | Read, interpret as UTF-8 |
 | `6b520005` | Configuration page | Read, interpret as UTF-8 |
 
+## Battery service
+
+The standard Battery Service (`0x180F`) exposes Battery Level (`0x2A19`) as
+one unsigned byte, 0–100 percent. It supports reads and notifications without
+pairing. The initial value is sampled before advertising starts; the main loop
+refreshes it every 10 seconds and notifies subscribers when the percentage changes.
+In nRF Connect, read Battery Level or enable its notifications.
+
+This uses the existing ADC voltage-based estimate, not an ETA6098 register or
+fuel gauge. It does not report charging status, and the estimate can be affected
+by charging and load.
+
 ## Change a setting
 
 For example, set volume to 60:
@@ -75,6 +87,10 @@ to replace the device's saved settings with your local `data/` files.
 
 ## Hardware verification
 
+- Read Battery Level before pairing; verify a single byte in the range 0–100.
+- Enable battery notifications and vary battery voltage; verify updates when the
+  percentage changes. Disable notifications, then disconnect/reconnect and test
+  subscribing again.
 - Check that an unauthenticated read/write prompts pairing and an incorrect code
   cannot access config; pair with the displayed code.
 - Save a volume patch, read it back, reboot, and check that volume persists.

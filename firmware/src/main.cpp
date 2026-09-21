@@ -133,7 +133,7 @@ void setup() {
   #endif
 
   init_wifi();
-  init_ble_config();
+  init_ble_config(get_battery_percentage());
 
   Serial.println("Initialization complete. Starting main loop.");
   Serial.flush();
@@ -154,6 +154,11 @@ void main_loop() {
   // --- FPS Calculation ---
   frame_count++;
   unsigned long current_millis = millis();
+  static unsigned long last_battery_time = 0;
+  if (current_millis - last_battery_time >= 10000UL) {
+    last_battery_time = current_millis;
+    update_ble_battery(get_battery_percentage());
+  }
   if (current_millis - last_fps_time >= 1000) {
     // Calculate FPS over the last second
     current_fps = frame_count / ((current_millis - last_fps_time) / 1000.0f);

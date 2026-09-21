@@ -2,6 +2,7 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLESecurity.h>
+#include <BLE2902.h>
 #include <atomic>
 #include "ble_config.h"
 #include "device_config.h"
@@ -22,6 +23,9 @@ String patch;
 bool overflow = false;
 BLECharacteristic *result;
 BLECharacteristic *data;
+BLECharacteristic *battery_level;
+BLE2902 *battery_notifications;
+uint8_t last_battery_level = 0;
 
 void status(const char *message) { result->setValue(message); }
 
@@ -42,6 +46,9 @@ class SecurityCallbacks : public BLESecurityCallbacks {
 
 class ServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer *) override {
+    // Pairing is not bonded; each connection must subscribe again.
+    battery_notifications->setNotifications(false);
+    battery_notifications->setIndications(false);
     patch = "";
     overflow = false;
     data->setValue("");
@@ -113,7 +120,7 @@ PatchCallbacks patch_callbacks;
 ControlCallbacks control_callbacks;
 } // namespace
 
-void init_ble_config() {
+void init_ble_config(int battery_percentage) {
   saved_config = device_config();
   char name[24];
   snprintf(name, sizeof(name), PROJECT_NAME "-%06lX", (unsigned long)(ESP.getEfuseMac() & 0xffffff));
@@ -140,11 +147,31 @@ void init_ble_config() {
   data->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM);
   status("ready");
   service->start();
+  BLEService *battery = server->createService(BLEUUID(uint16_t(0x180F)));
+  battery_level = battery->createCharacteristic(
+      BLEUUID(uint16_t(0x2A19)),
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  battery_notifications = new BLE2902();
+  battery_level->addDescriptor(battery_notifications);
+  last_battery_level = static_cast<uint8_t>(constrain(battery_percentage, 0, 100));
+  battery_level->setValue(&last_battery_level, 1);
+  battery->start();
   auto *advertising = BLEDevice::getAdvertising();
   advertising->addServiceUUID(SERVICE_UUID);
+  advertising->addServiceUUID(BLEUUID(uint16_t(0x180F)));
   advertising->setScanResponse(true);
   BLEDevice::startAdvertising();
   Serial.printf("BLE config ready: %s. Pair using the code shown on the left TFT.\n", name);
+}
+
+void update_ble_battery(int battery_percentage) {
+  if (!battery_level) return;
+  uint8_t level = static_cast<uint8_t>(constrain(battery_percentage, 0, 100));
+  if (level == last_battery_level) return;
+  last_battery_level = level;
+  battery_level->setValue(&level, 1);
+  // The BLE library only notifies connected clients with notifications enabled.
+  battery_level->notify();
 }
 
 bool draw_ble_pairing() {
