@@ -5,8 +5,22 @@
 Deploy the current `backend/worker.mjs` first; it provides protected `/ask` and `/speak`.
 Then upload the firmware normally, without uploading the filesystem.
 
+For the Groq migration, add `GROQ_API_KEY` to Cloudflare Worker secrets and deploy
+the Worker. Keep `GEMINI_API_KEY` for speech and `DEVICE_TOKEN` unchanged. No new
+firmware is required: `/ask` still returns `{ok, model, text}`. It now sends WAV
+to Groq `whisper-large-v3-turbo`, then the transcript to `openai/gpt-oss-20b`
+with low reasoning effort. `/speak` and `/test-speech` still use Gemini TTS;
+`/test-ai` still checks Gemini. Health requires all three secrets.
+
+Groq timing fields are `transcription_headers_ms`, `transcription_body_ms`,
+`transcription_ms`, `llm_headers_ms`, `llm_body_ms`, and `llm_ms`, plus existing
+upload/Worker totals. Existing firmware does not print these new provider fields
+and may report Worker timings unavailable; device total timing still works.
+Empty or uniformly low-confidence transcriptions skip the LLM and TTS; this is
+a heuristic, so validate silence, noise, and clear English/Ukrainian recordings.
+
 `/ask` system instructions allow English and Ukrainian replies only.
-Unrecognized or absent speech is ignored: Gemini's `[IGNORE]` marker becomes
+Unrecognized or absent speech is ignored: the reply model's `[IGNORE]` marker becomes
 `{ok:true, text:"", ignored:true}`, so existing firmware skips voice output.
 Recognition remains model-based; verify with silence/noise and a clear question.
 Other languages receive an English request to use a supported language. These are model
@@ -59,7 +73,8 @@ A new recording cannot overwrite an in-flight upload. Only one network request
 or pending speech response is allowed at a time; a busy request is rejected and
 is not sent later. Errors are reported on serial; retry manually. Each question
 is independent, with no conversation history. Recorded audio goes through the
-Worker to Gemini. The Worker does not persist it or log request bodies.
+Worker to Groq; answer text goes to Gemini for TTS. The Worker does not persist
+recordings or transcripts or log request bodies.
 
 The Worker rejects wrong content types, malformed WAV headers and oversized
 uploads before contacting Gemini. Its free-plan CPU budget still needs validation

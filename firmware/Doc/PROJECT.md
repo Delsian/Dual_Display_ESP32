@@ -22,7 +22,8 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
   one request at a time, persistent connection reuse, serial replies/timings.
 - [WAV helpers](../src/speech_wav.cpp): mono 16 kHz upload and conversion of
   generated 24 kHz mono audio to 16 kHz stereo playback.
-- [Cloudflare Worker](../backend/worker.mjs): Gemini calls behind a device token;
+- [Cloudflare Worker](../backend/worker.mjs): Groq transcription/replies and Gemini
+  TTS behind a device token;
   `/health`, `/test-ai`, `/test-speech`, `/ask`, and `/speak`. Deployment is manual
   through Cloudflare. Service: `https://parrot.eug-krashtan.workers.dev`.
 - [Firmware settings](../include/config.h), [runtime configuration](CONFIG.md),
@@ -30,7 +31,7 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
 
 ## Decisions and constraints
 
-- AI replies must use English or Ukrainian only; `/ask` sends this as a Gemini
+- AI replies must use English or Ukrainian only; `/ask` sends this as a Groq
   system instruction. Unsupported languages receive an English language reminder.
   Unrecognized/absent speech is ignored: the Worker maps `[IGNORE]` to an empty
   answer, which firmware skips for TTS.
@@ -46,7 +47,7 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
   Requests are independent, without conversation history.
 - Provider credentials stay in Worker secrets. Local `.dev.vars` and
   `include/speech_secrets.h` contain secrets and must not be copied into context,
-  logs, or commits. Firmware uses the device token, not the Gemini API key.
+  logs, or commits. Firmware uses the device token, not provider API keys.
 - Model identifiers live in the Worker. Their presence in source does not prove
   current availability, free quota, or lowest pricing; verify before changing.
 - Firmware builds, filesystem uploads, and Worker deployments are separate.

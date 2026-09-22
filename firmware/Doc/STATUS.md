@@ -26,11 +26,11 @@ Updated: 2026-09-22. Scope: voice AI workflow.
 
 - Unrecognized speech now maps to an empty answer (no TTS); Worker redeployment
   and real-audio validation pending.
-- `/ask` now includes English/Ukrainian-only system instructions in source;
-  redeployment and language behavior validation remain pending.
+- English/Ukrainian-only instructions preserved; validate after Groq deployment.
 - `AUDIO_AI_REPLY_TEST=1`, `AUDIO_VOICE_ACTIVATION=1`, microphone channel 0.
-- Worker source selects `gemini-3.6-flash` for replies and
-  `gemini-2.5-flash-preview-tts` for fixed speech; no new pricing validation.
+- `/ask` now uses Groq Whisper Turbo → `openai/gpt-oss-20b`; Gemini TTS unchanged.
+- Groq key and English/Ukrainian text calls verified (339/153 ms locally).
+  Mocked routing/error tests passed; deployed audio flow remains unverified.
 - Energy detection can trigger on background sounds; tune `AUDIO_VAD_MIN_RMS`
   in `include/config.h`. This is not wake-word detection.
 - Upload starts after recording; no streaming capture/upload implemented.
@@ -41,8 +41,8 @@ Updated: 2026-09-22. Scope: voice AI workflow.
 
 - Upload keep-alive firmware; verify reuse after 30–60 seconds, close after three
   minutes, no further pings until a new request, and recovery after Wi-Fi loss.
-- User also requested exploring upload while recording and minimal model cost.
-  Streaming and model changes remain pending; settle the approach before coding.
+- Add `GROQ_API_KEY` Worker secret and deploy; test both languages and noise.
+- Streaming upload remains pending; settle the approach before coding.
 - Validate each next step on hardware, including no speaker-triggered capture,
   cutoff behavior, background noise, and continued animation.
 - No blocker is currently reported. Read [SPEECH.md](SPEECH.md) for operating

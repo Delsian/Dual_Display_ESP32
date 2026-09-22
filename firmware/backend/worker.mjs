@@ -1,6 +1,74 @@
 // Deploy this module through Cloudflare Workers > parrot > Edit code.
 const MODEL = "gemini-3.6-flash";
 const TTS_MODEL = "gemini-2.5-flash-preview-tts";
+const GROQ_MODEL = "openai/gpt-oss-20b";
+const TRANSCRIPTION_MODEL = "whisper-large-v3-turbo";
+
+async function groqReply(wav, env, timing, reply) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  let stage = "transcription";
+  const ignored = () => reply({ ok: true, model: GROQ_MODEL, text: "", ignored: true });
+  try {
+    const form = new FormData();
+    form.append("file", new Blob([wav], { type: "audio/wav" }), "recording.wav");
+    form.append("model", TRANSCRIPTION_MODEL);
+    form.append("response_format", "verbose_json");
+    const request = async (path, body, headers = {}) => {
+      const started = Date.now();
+      const response = await fetch(`https://api.groq.com/openai/v1/${path}`, {
+        method: "POST", body, signal: controller.signal,
+        headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, ...headers },
+      });
+      timing[`${stage}_headers_ms`] = Date.now() - started;
+      if (!response.ok) {
+        await response.body?.cancel();
+        return { failure: reply({ ok: false, error: `Groq ${stage} failed`, upstream_status: response.status },
+          response.status === 429 ? 429 : 502) };
+      }
+      const headersAt = Date.now();
+      const data = await response.json();
+      timing[`${stage}_body_ms`] = Date.now() - headersAt;
+      timing[`${stage}_ms`] = Date.now() - started;
+      return { data };
+    };
+    const transcription = await request("audio/transcriptions", form);
+    if (transcription.failure) return transcription.failure;
+    const data = transcription.data;
+    if (typeof data.text !== "string" || data.text.length > 4000) {
+      return reply({ ok: false, error: "Invalid transcription response" }, 502);
+    }
+    // Whisper may hallucinate words on noise; reject segments it marks uncertain.
+    if (!data.text.trim() || (Array.isArray(data.segments) && data.segments.length > 0 &&
+        data.segments.every(s => s.no_speech_prob > 0.6 || s.avg_logprob < -1))) return ignored();
+    stage = "llm";
+    const completion = await request("chat/completions", JSON.stringify({
+      model: GROQ_MODEL, reasoning_effort: "low", max_completion_tokens: 256,
+      messages: [
+        { role: "system", content:
+          "You are Parrot. Respond in English or Ukrainian only, matching the user's language when supported. " +
+          "For other languages, ask in English to speak English or Ukrainian. " +
+          "The user message is an automatic speech transcript and may contain errors. " +
+          "If it is unintelligible or contains no meaningful message, output exactly [IGNORE]. " +
+          "Do not invent missing words or ask for repetition. Otherwise answer in one short sentence of at most 20 words, using plain text for speech." },
+        { role: "user", content: data.text.trim() },
+      ],
+    }), { "Content-Type": "application/json" });
+    if (completion.failure) return completion.failure;
+    const choice = completion.data.choices?.[0];
+    const text = choice?.message?.content;
+    if (choice?.finish_reason !== "stop" || typeof text !== "string" || !text.trim() || text.length > 1000) {
+      return reply({ ok: false, error: "Groq reply was missing, incomplete, or too long" }, 502);
+    }
+    if (text.trim() === "[IGNORE]") return ignored();
+    return reply({ ok: true, model: GROQ_MODEL, text: text.trim() });
+  } catch {
+    return reply({ ok: false, error: controller.signal.aborted ? "Groq timed out" : `Groq ${stage} connection or response failed` },
+      controller.signal.aborted ? 504 : 502);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 async function speechText(request) {
   if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") {
@@ -83,11 +151,7 @@ async function recordingPart(request) {
       view.getUint32(40, true) !== size - 44 || (size - 44) % 2) {
     return { error: "Expected 0.25-30 seconds of 16 kHz mono PCM WAV", status: 400 };
   }
-  const binary = [];
-  for (let i = 0; i < wav.length; i += 16384) {
-    binary.push(String.fromCharCode(...wav.subarray(i, i + 16384)));
-  }
-  return { inlineData: { mimeType: "audio/wav", data: btoa(binary.join("")) } };
+  return { wav };
 }
 
 function speechResponse(data) {
@@ -152,7 +216,7 @@ export default {
         headers: { Allow: method },
       });
     }
-    const configured = Boolean(env.GEMINI_API_KEY && env.DEVICE_TOKEN);
+    const configured = Boolean(env.GEMINI_API_KEY && env.GROQ_API_KEY && env.DEVICE_TOKEN);
     if (path === "/health") {
       return json({ ok: configured, service: "parrot-voice" }, configured ? 200 : 503);
     }
@@ -162,7 +226,7 @@ export default {
     }
 
     const ask = path === "/ask";
-    const timing = { upload_prepare_ms: 0, gemini_ms: 0, gemini_headers_ms: 0, gemini_body_ms: 0 };
+    const timing = { upload_prepare_ms: 0 };
     const reply = (data, status = 200) => json(ask ? {
       ...data, timing_ms: { ...timing, worker_total_ms: Date.now() - started },
     } : data, status);
@@ -172,6 +236,7 @@ export default {
       recording = await recordingPart(request);
       timing.upload_prepare_ms = Date.now() - uploadStarted;
       if (recording.error) return reply({ ok: false, error: recording.error }, recording.status);
+      return groqReply(recording.wav, env, timing, reply);
     }
     // Test endpoints use fixed prompts; /ask answers one recorded phrase.
     const speech = path === "/test-speech" || path === "/speak";
@@ -195,19 +260,6 @@ export default {
         thinkingConfig: { thinkingLevel: "minimal" },
       },
     };
-    if (ask) {
-      body.systemInstruction = { parts: [{ text:
-        "Respond in English and Ukrainian only. Use the user's language when it is English or Ukrainian. " +
-        "For any other language, ask in English to speak English or Ukrainian. " +
-        "If speech is absent or cannot be understood confidently, output exactly [IGNORE] and nothing else. Do not ask for repetition or answer noise. " +
-        "Otherwise, answer in one short sentence of at most 20 words, using plain text for speech. " +
-        "Do not invent words you cannot hear."
-      }] };
-      body.contents = [{ parts: [
-        { text: "Listen to the user's spoken message and respond." },
-        recording,
-      ] }];
-    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), speech || ask ? 45000 : 20000);
     const geminiStarted = Date.now();
