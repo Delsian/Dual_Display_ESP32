@@ -32,12 +32,16 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
 
 - AI replies must use English or Ukrainian only; `/ask` sends this as a Gemini
   system instruction. Unsupported languages receive an English language reminder.
+  Unrecognized/absent speech is ignored: the Worker maps `[IGNORE]` to an empty
+  answer, which firmware skips for TTS.
 - Firmware prints the `/ask` answer, then posts its text to `/speak` for TTS and
   playback. Speech is bounded to ten seconds; failures preserve the serial answer.
 - Keep Wi-Fi modem sleep enabled when BLE is active: disabling it caused a
   Wi-Fi driver abort on hardware. Retain HTTPS certificate validation.
 - Reuse HTTPS connections to avoid repeated handshake delay; do not automatically
   retry POSTs that could already have been processed by the provider.
+  Idle connections receive health requests every 25 seconds, stopping three
+  minutes after the last user network job completes; pings do not extend this limit.
 - Capture ends at five seconds or silence; upload currently starts afterward.
   Requests are independent, without conversation history.
 - Provider credentials stay in Worker secrets. Local `.dev.vars` and

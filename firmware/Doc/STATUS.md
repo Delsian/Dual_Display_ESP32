@@ -6,8 +6,10 @@ Updated: 2026-09-22. Scope: voice AI workflow.
 
 - Microphone phrase → Worker `/ask` → Gemini text reply in serial works on
   hardware, per user logs. Actual reply speech is now implemented locally.
-- Reply speech: firmware build and mocked Worker validation passed; deployment
-  and end-to-end hardware playback of actual answers remain pending.
+- Reply speech: user logs confirm successful TTS and playback on hardware.
+- Keep-alive success confirmed in user logs; three-minute close validation pending.
+- Detailed Gemini headers/body and speech timing added; deployment and hardware
+  timing validation pending. Mocked Worker timing checks passed.
 - Fixed-phrase `/test-speech` download and speaker playback work on hardware.
 - HTTPS connection reuse works: user logs showed zero connection setup time
   for reused connections, with total replies around 2.3–3.4 seconds in those
@@ -22,7 +24,8 @@ Updated: 2026-09-22. Scope: voice AI workflow.
 
 ## Current configuration and limits
 
-- Local API key updated; deployed Worker secret still needs updating manually.
+- Unrecognized speech now maps to an empty answer (no TTS); Worker redeployment
+  and real-audio validation pending.
 - `/ask` now includes English/Ukrainian-only system instructions in source;
   redeployment and language behavior validation remain pending.
 - `AUDIO_AI_REPLY_TEST=1`, `AUDIO_VOICE_ACTIVATION=1`, microphone channel 0.
@@ -36,8 +39,8 @@ Updated: 2026-09-22. Scope: voice AI workflow.
 
 ## Pending work
 
-- Deploy Worker `/speak` and upload firmware; validate actual English/Ukrainian
-  replies, TTS failures, and automatic capture resuming after playback.
+- Upload keep-alive firmware; verify reuse after 30–60 seconds, close after three
+  minutes, no further pings until a new request, and recovery after Wi-Fi loss.
 - User also requested exploring upload while recording and minimal model cost.
   Streaming and model changes remain pending; settle the approach before coding.
 - Validate each next step on hardware, including no speaker-triggered capture,

@@ -162,7 +162,7 @@ export default {
     }
 
     const ask = path === "/ask";
-    const timing = { upload_prepare_ms: 0, gemini_ms: 0 };
+    const timing = { upload_prepare_ms: 0, gemini_ms: 0, gemini_headers_ms: 0, gemini_body_ms: 0 };
     const reply = (data, status = 200) => json(ask ? {
       ...data, timing_ms: { ...timing, worker_total_ms: Date.now() - started },
     } : data, status);
@@ -183,7 +183,7 @@ export default {
     }
     const model = speech ? TTS_MODEL : MODEL;
     const body = speech ? {
-      contents: [{ parts: [{ text: `Read the following text aloud exactly as written, without translating or adding words:\n${spokenText}` }] }],
+      contents: [{ parts: [{ text: `Speak like a playful talking parrot: a high-pitched, bright, slightly raspy voice, with bouncy rhythm and crisp pronunciation. Keep every word understandable. Read only the text below, without translating, repeating, adding words, or making bird sounds:\n${spokenText}` }] }],
       generationConfig: {
         responseModalities: ["AUDIO"],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } },
@@ -199,7 +199,8 @@ export default {
       body.systemInstruction = { parts: [{ text:
         "Respond in English and Ukrainian only. Use the user's language when it is English or Ukrainian. " +
         "For any other language, ask in English to speak English or Ukrainian. " +
-        "Answer in one short sentence of at most 20 words, using plain text for speech. If speech is unclear or absent, ask in English to repeat it. " +
+        "If speech is absent or cannot be understood confidently, output exactly [IGNORE] and nothing else. Do not ask for repetition or answer noise. " +
+        "Otherwise, answer in one short sentence of at most 20 words, using plain text for speech. " +
         "Do not invent words you cannot hear."
       }] };
       body.contents = [{ parts: [
@@ -223,7 +224,9 @@ export default {
           signal: controller.signal,
         }
       );
-      timing.gemini_ms = Date.now() - geminiStarted;
+      const geminiHeadersAt = Date.now();
+      timing.gemini_headers_ms = geminiHeadersAt - geminiStarted;
+      timing.gemini_ms = timing.gemini_headers_ms;
       if (!upstream.ok) {
         // Do not expose provider error bodies or credentials.
         return reply(
@@ -232,14 +235,24 @@ export default {
         );
       }
       const data = await upstream.json();
+      timing.gemini_body_ms = Date.now() - geminiHeadersAt;
       timing.gemini_ms = Date.now() - geminiStarted;
-      if (speech) return speechResponse(data);
+      if (speech) {
+        const response = speechResponse(data);
+        response.headers.set("Server-Timing",
+          `gemini_headers;dur=${timing.gemini_headers_ms}, gemini_body;dur=${timing.gemini_body_ms}, worker_total;dur=${Date.now() - started}`);
+        return response;
+      }
       const text = (data.candidates?.[0]?.content?.parts ?? [])
         .filter(part => typeof part.text === "string" && !part.thought)
         .map(part => part.text).join("").trim();
       if (!text) return reply({ ok: false, error: "Gemini returned no text" }, 502);
       if (ask && (data.candidates?.[0]?.finishReason !== "STOP" || text.length > 1000)) {
         return reply({ ok: false, error: "Gemini reply was incomplete or too long" }, 502);
+      }
+      // Existing firmware skips TTS for an empty answer; never speak the marker.
+      if (ask && text === "[IGNORE]") {
+        return reply({ ok: true, model: MODEL, text: "", ignored: true });
       }
       return reply({ ok: true, model: MODEL, text });
     } catch {

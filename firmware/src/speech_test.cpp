@@ -18,6 +18,8 @@
 
 namespace {
 constexpr size_t MAX_WAV_BYTES = 480044;
+constexpr uint32_t KEEP_ALIVE_MS = 25000;
+constexpr uint32_t CONNECTION_IDLE_MS = 180000;
 std::atomic<bool> busy{false};
 std::atomic<uint8_t *> ready{nullptr};
 size_t ready_bytes = 0;
@@ -100,6 +102,7 @@ bool network_ready() {
 }
 
 uint8_t *download_speech(HttpSession &session, size_t &bytes, const String &text = String()) {
+  const uint32_t started = millis();
   if (!network_ready()) return nullptr;
   auto &http = session.http;
   // writeToStream decodes HTTP chunked transfer into the bounded WAV sink.
@@ -107,8 +110,8 @@ uint8_t *download_speech(HttpSession &session, size_t &bytes, const String &text
                                     "https://parrot.eug-krashtan.workers.dev/speak")) return nullptr;
   http.addHeader("Authorization", String("Bearer ") + SPEECH_DEVICE_TOKEN);
   http.addHeader("Accept", "audio/wav");
-  const char *headers[] = {"Content-Type"};
-  http.collectHeaders(headers, 1);
+  const char *headers[] = {"Content-Type", "Server-Timing"};
+  http.collectHeaders(headers, 2);
   String payload;
   if (!text.isEmpty()) {
     DynamicJsonDocument body(8192);
@@ -119,7 +122,15 @@ uint8_t *download_speech(HttpSession &session, size_t &bytes, const String &text
     }
     http.addHeader("Content-Type", "application/json");
   }
+  const uint32_t request_started = millis();
   const int status = http.POST(payload);
+  const uint32_t headers_at = millis();
+  Serial.printf("Speech timing: post_to_headers=%lu ms\n",
+                static_cast<unsigned long>(headers_at - request_started));
+  if (!http.header("Server-Timing").isEmpty()) {
+    Serial.print("Speech Worker timing: ");
+    Serial.println(http.header("Server-Timing"));
+  }
   Serial.printf("Speech: HTTP %d\n", status);
   if (status != 200 || http.header("Content-Type") != "audio/wav" ||
       http.getSize() > static_cast<int>(MAX_WAV_BYTES)) {
@@ -131,13 +142,19 @@ uint8_t *download_speech(HttpSession &session, size_t &bytes, const String &text
   if (!wav) { session.finish(false); return nullptr; }
   WavSink sink(wav.get());
   const int received = http.writeToStream(&sink);
+  const uint32_t body_at = millis();
   session.finish(received >= 0 && static_cast<size_t>(received) == sink.used);
+  Serial.printf("Speech timing: response_body=%lu ms, wav=%u bytes\n",
+                static_cast<unsigned long>(body_at - headers_at), unsigned(sink.used));
   if (received < 0 || static_cast<size_t>(received) != sink.used) return nullptr;
   const size_t frames = speech_wav_frames(wav.get(), sink.used);
   if (!frames) { Serial.println("Speech: invalid WAV response."); return nullptr; }
   Buffer pcm(static_cast<uint8_t *>(heap_caps_malloc(frames * 4, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)), heap_caps_free);
   if (!pcm || !speech_wav_convert(wav.get(), sink.used, reinterpret_cast<int16_t *>(pcm.get()), frames)) return nullptr;
   bytes = frames * 4;
+  Serial.printf("Speech timing: convert=%lu ms, total=%lu ms\n",
+                static_cast<unsigned long>(millis() - body_at),
+                static_cast<unsigned long>(millis() - started));
   return pcm.release();
 }
 
@@ -198,6 +215,11 @@ void upload_reply(HttpSession &session, UploadJob *job, String &answer) {
                 static_cast<unsigned long>(parsed_at - body_at),
                 static_cast<unsigned long>(parsed_at - job->started));
   const JsonObjectConst timing = result["timing_ms"].as<JsonObjectConst>();
+  if (timing["gemini_headers_ms"].is<uint32_t>() && timing["gemini_body_ms"].is<uint32_t>()) {
+    Serial.printf("AI Worker timing: gemini_headers=%lu ms, gemini_body=%lu ms\n",
+                  static_cast<unsigned long>(timing["gemini_headers_ms"].as<uint32_t>()),
+                  static_cast<unsigned long>(timing["gemini_body_ms"].as<uint32_t>()));
+  }
   if (timing["upload_prepare_ms"].is<uint32_t>() && timing["gemini_ms"].is<uint32_t>() &&
       timing["worker_total_ms"].is<uint32_t>()) {
     Serial.printf("AI Worker timing: upload_prepare=%lu ms, gemini=%lu ms, worker_total=%lu ms\n",
@@ -214,13 +236,38 @@ void upload_reply(HttpSession &session, UploadJob *job, String &answer) {
 
 QueueHandle_t requests = nullptr;
 
+void keep_alive(HttpSession &session) {
+  // Use the same client, and consume the whole response before allowing reuse.
+  if (!session.begin("https://parrot.eug-krashtan.workers.dev/health")) return;
+  auto &http = session.http;
+  http.setTimeout(3000);
+  const int status = http.GET();
+  uint8_t body[256];
+  WavSink sink(body, sizeof(body));
+  int received = -1;
+  if (status == 200 && http.getSize() <= static_cast<int>(sizeof(body))) {
+    received = http.writeToStream(&sink);
+  }
+  const bool complete = received > 0 && static_cast<size_t>(received) == sink.used;
+  session.finish(complete);
+  http.setTimeout(50000);
+  Serial.printf("HTTP: keep-alive %s (HTTP %d).\n", complete ? "ok" : "failed", status);
+}
+
 void network_task(void *) {
   HttpSession session;
+  uint32_t last_request_completed = 0;
+  bool active_window = false;
   for (;;) {
     UploadJob *job = nullptr; // Null means the fixed-phrase playback test.
     if (xQueueReceive(requests, &job, pdMS_TO_TICKS(1000)) != pdTRUE) {
-      if (WiFi.status() != WL_CONNECTED || millis() - session.last_used >= 60000UL) {
+      if (!active_window) continue;
+      if (WiFi.status() != WL_CONNECTED || millis() - last_request_completed >= CONNECTION_IDLE_MS) {
         session.finish(false);
+        active_window = false;
+        Serial.println("HTTP: connection closed (offline or 3 minutes idle).");
+      } else if (millis() - session.last_used >= KEEP_ALIVE_MS && session.tls.connected()) {
+        keep_alive(session);
       }
       continue;
     }
@@ -257,6 +304,9 @@ void network_task(void *) {
         busy.store(false);
       }
     }
+    // Health requests never extend this window; only completed user jobs do.
+    last_request_completed = millis();
+    active_window = true;
   }
 }
 

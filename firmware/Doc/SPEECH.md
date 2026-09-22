@@ -5,8 +5,11 @@
 Deploy the current `backend/worker.mjs` first; it provides protected `/ask` and `/speak`.
 Then upload the firmware normally, without uploading the filesystem.
 
-`/ask` system instructions allow English and Ukrainian replies only. Other
-languages receive an English request to use a supported language. These are model
+`/ask` system instructions allow English and Ukrainian replies only.
+Unrecognized or absent speech is ignored: Gemini's `[IGNORE]` marker becomes
+`{ok:true, text:"", ignored:true}`, so existing firmware skips voice output.
+Recognition remains model-based; verify with silence/noise and a clear question.
+Other languages receive an English request to use a supported language. These are model
 instructions, not a strict output-language validator. After changing the local
 API key, also update the deployed Worker's `GEMINI_API_KEY` secret in Cloudflare;
 `.dev.vars` changes do not update the deployed service. Deploy `backend/worker.mjs`
@@ -64,6 +67,23 @@ with real recordings, especially near the 30-second limit.
 
 ## Measure response latency
 
+Detailed diagnostics require both the updated Worker and firmware:
+- `AI Worker timing: gemini_headers` measures the provider request until headers;
+  `gemini_body` measures reading and parsing the provider JSON afterward.
+- `Speech Worker timing` reports the same split through the `Server-Timing`
+  header, plus `worker_total` including preparation of the WAV response.
+- `Speech timing: post_to_headers` measures the ESP32 TTS POST until headers,
+  excluding separately logged connection setup. `response_body` covers WAV
+  allocation/download and intervening logging. `convert` includes connection
+  cleanup, WAV validation, PCM allocation, and resampling. `total` covers the
+  speech operation from network preparation until PCM is ready, excluding
+  waiting for the audio task and playback itself.
+
+Provider header timing includes networking and server processing; it cannot
+separate model inference from provider queueing. Worker timings overlap device
+timings and must not be added to them. Missing headers on an older Worker do not
+prevent playback. Compare several questions to assess variability.
+
 Deploy the updated Worker and upload firmware, then ask the same short question
 three times within a minute. Copy the `HTTP timing:`, `AI timing:` and
 `AI Worker timing:` lines from serial.
@@ -95,10 +115,14 @@ duration; do not add them together. Worker clocks can have coarse resolution
 between I/O events, so small processing times are approximate. An older Worker
 still works but the firmware reports that Worker timings are unavailable.
 
-One persistent network task owns the HTTPS client for both `/ask` and
-`/test-speech`. Complete responses allow HTTP keep-alive reuse. Failed requests
-and partial/unread responses close the socket; idle connections close after
-about 60 seconds. A disconnected socket is re-established on the next request.
+One persistent network task owns the HTTPS client for `/ask`, `/speak`, and
+`/test-speech`. Complete responses allow HTTP keep-alive reuse. While idle, it
+sends `GET /health` on an existing connection every 25 seconds and consumes the
+response. These requests do not call Gemini or extend the inactivity window.
+The connection closes after three minutes since the last user network job
+completed, or on Wi-Fi loss. Failed/partial responses also close the socket.
+Background pings do not reopen a closed connection; the next user request does.
+Health reads use a three-second timeout; a queued request waits for an ongoing ping.
 If the peer closes during a POST, the request fails rather than automatically
 replaying a potentially processed AI request; retry manually.
 
@@ -107,7 +131,9 @@ while BLE is active; disabling it causes the Wi-Fi driver to abort on this board
 HTTPS connection reuse and certificate validation remain enabled.
 
 After flashing, check three consecutive questions for `reused=yes` after the
-first, compare total latency, then wait over a minute and check a fresh connection.
+first, then wait 30–60 seconds and check keep-alive logs and connection reuse.
+Wait over three minutes after a completed request: expect a close log, no further
+pings, and a fresh connection on the next question. No Worker redeployment is needed.
 Also test a Wi-Fi disconnect/reconnect and the `speech` command followed by a
 question. These require hardware; a successful build cannot establish the
 latency improvement or the server's connection retention behavior.
