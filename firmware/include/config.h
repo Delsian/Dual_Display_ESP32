@@ -38,8 +38,16 @@
 #else
 #define USE_AUDIO 0
 #endif
-#define AUDIO_RECORD_SECONDS 30 // PSRAM: 64 KB per second, stereo 16-bit PCM.
+#define AUDIO_RECORD_SECONDS 5 // Hard limit including pre-roll; 64 KB per second.
 #define AUDIO_OUTPUT_VOLUME 75 // ES8311 volume, 0..100.
+#define AUDIO_AI_REPLY_TEST 1 // Release KEY1 to upload; 0 restores local replay.
+#define AUDIO_AI_MIC_CHANNEL 0 // First I2S microphone channel; select 1 for the other.
+#define AUDIO_VOICE_ACTIVATION 1 // Adaptive energy detection; KEY1 remains available.
+#define AUDIO_VAD_MIN_RMS 600 // Minimum speech level in signed 16-bit PCM units.
+#define AUDIO_VAD_START_MS 80 // Reject short clicks before starting.
+#define AUDIO_VAD_SILENCE_MS 800
+#define AUDIO_VAD_PREROLL_MS 200
+#define AUDIO_VAD_COOLDOWN_MS 1000 // After startup, requests, or playback.
 
 // --- ToF Sensor (VL53L5CX) Configuration ---
 #ifdef BOARD_WAVESHARE_DUALEYE

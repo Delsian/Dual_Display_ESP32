@@ -2,6 +2,8 @@
 #include "audio.h"
 #include "config.h"
 #include "device_config.h"
+#include "speech_test.h"
+#include "audio_vad.h"
 
 #if USE_AUDIO
 #include <Wire.h>
@@ -14,10 +16,13 @@ constexpr uint32_t SAMPLE_RATE = 16000; // Codec clock tables below require 16 k
 constexpr size_t FRAME_BYTES = 2 * sizeof(int16_t);
 constexpr size_t CHUNK_BYTES = 256 * FRAME_BYTES;
 constexpr size_t BUFFER_BYTES = SAMPLE_RATE * FRAME_BYTES * AUDIO_RECORD_SECONDS;
+constexpr size_t PREROLL_BYTES = SAMPLE_RATE * FRAME_BYTES * AUDIO_VAD_PREROLL_MS / 1000;
 constexpr uint32_t DEBOUNCE_MS = 20;
 constexpr uint8_t MIC_ADDRESS = 0x40;
 constexpr uint8_t SPEAKER_ADDRESS = 0x18;
 static_assert(AUDIO_RECORD_SECONDS > 0, "Recording buffer must be nonempty");
+static_assert(AUDIO_RECORD_SECONDS <= 5, "Voice recordings must not exceed five seconds");
+static_assert(PREROLL_BYTES > 0 && PREROLL_BYTES < BUFFER_BYTES, "Invalid pre-roll size");
 static_assert(AUDIO_OUTPUT_VOLUME >= 0 && AUDIO_OUTPUT_VOLUME <= 100, "Invalid audio volume");
 
 uint8_t *record_buffer = nullptr;
@@ -87,8 +92,31 @@ void audio_task(void *) {
   size_t recorded = 0;
   size_t played = 0;
   size_t silence_written = 0;
+  uint8_t *speech_buffer = nullptr;
   uint8_t chunk[CHUNK_BYTES];
   const uint8_t silence[CHUNK_BYTES] = {};
+  uint8_t *preroll = record_buffer + BUFFER_BYTES;
+  size_t pre_write = 0, pre_used = 0;
+  uint32_t last_blocked = millis();
+  AudioVad vad(AUDIO_VAD_MIN_RMS, SAMPLE_RATE * AUDIO_VAD_START_MS / 1000,
+               SAMPLE_RATE * AUDIO_VAD_SILENCE_MS / 1000);
+
+  auto finish_recording = [&](const char *reason) {
+    Serial.printf("Audio: stopped (%s), %u ms.\n", reason,
+                  unsigned(recorded * 1000 / (SAMPLE_RATE * FRAME_BYTES)));
+    vad.reset();
+    pre_write = pre_used = 0;
+    last_blocked = millis();
+    #if AUDIO_AI_REPLY_TEST
+    state = State::Idle;
+    request_audio_reply(record_buffer, recorded);
+    #else
+    played = 0;
+    silence_written = 0;
+    state = recorded ? State::Playing : State::Idle;
+    digitalWrite(PIN_AUDIO_PA, recorded ? HIGH : LOW);
+    #endif
+  };
 
   for (;;) {
     // RX is drained in every state, so a new recording never includes old DMA data.
@@ -106,30 +134,85 @@ void audio_task(void *) {
     }
     if (raw_pressed != stable_pressed && millis() - changed_at >= DEBOUNCE_MS) {
       stable_pressed = raw_pressed;
-      if (stable_pressed) {
+      if (stable_pressed && state != State::Recording) {
+        #if AUDIO_AI_REPLY_TEST
+        if (!audio_reply_available()) {
+          Serial.println("Audio: waiting for network/request; recording not started.");
+          continue;
+        }
+        #endif
         digitalWrite(PIN_AUDIO_PA, LOW);
         i2s_zero_dma_buffer(AUDIO_PORT);
+        heap_caps_free(speech_buffer);
+        speech_buffer = nullptr;
         recorded = 0;
+        vad.reset();
+        pre_write = pre_used = 0;
         state = State::Recording;
         Serial.println("Audio: recording.");
-      } else if (state == State::Recording) {
-        played = 0;
-        silence_written = 0;
-        state = recorded ? State::Playing : State::Idle;
-        digitalWrite(PIN_AUDIO_PA, recorded ? HIGH : LOW);
-        Serial.printf("Audio: replaying %u ms.\n", unsigned(recorded * 1000 / (SAMPLE_RATE * FRAME_BYTES)));
+      } else if (!stable_pressed && state == State::Recording) {
+        finish_recording("KEY1 released");
       }
     }
 
+    if (state == State::Idle && !stable_pressed) {
+      speech_buffer = take_speech_test(recorded);
+      if (speech_buffer) {
+        played = 0;
+        silence_written = 0;
+        i2s_zero_dma_buffer(AUDIO_PORT);
+        digitalWrite(PIN_AUDIO_PA, HIGH);
+        state = State::Playing;
+        Serial.println("Speech: playing AI voice.");
+      }
+    }
+
+    bool started_from_voice = false;
+    #if AUDIO_VOICE_ACTIVATION
+    bool available = true;
+    #if AUDIO_AI_REPLY_TEST
+    available = audio_reply_available();
+    #endif
+    if (state != State::Idle || stable_pressed || !available) {
+      last_blocked = millis();
+      pre_write = pre_used = 0;
+      if (state != State::Recording) vad.reset();
+    } else if (millis() - last_blocked >= AUDIO_VAD_COOLDOWN_MS) {
+      // Keep a circular history so activation includes the start of the phrase.
+      for (size_t i = 0; i < received; ++i) {
+        preroll[pre_write] = chunk[i];
+        pre_write = (pre_write + 1) % PREROLL_BYTES;
+      }
+      pre_used = min(PREROLL_BYTES, pre_used + received);
+      if (vad.process(chunk, received, AUDIO_AI_MIC_CHANNEL, false) == AudioVad::Start) {
+        const size_t oldest = (pre_write + PREROLL_BYTES - pre_used) % PREROLL_BYTES;
+        const size_t first = min(pre_used, PREROLL_BYTES - oldest);
+        memcpy(record_buffer, preroll + oldest, first);
+        memcpy(record_buffer + first, preroll, pre_used - first);
+        recorded = pre_used;
+        vad.reset();
+        state = State::Recording;
+        started_from_voice = true;
+        Serial.println("Audio: voice detected; recording.");
+      }
+    }
+    #endif
+
     if (state == State::Recording && recorded < BUFFER_BYTES) {
-      size_t count = min(received, BUFFER_BYTES - recorded);
-      memcpy(record_buffer + recorded, chunk, count);
-      recorded += count;
+      if (!started_from_voice) {
+        size_t count = min(received, BUFFER_BYTES - recorded);
+        memcpy(record_buffer + recorded, chunk, count);
+        recorded += count;
+      }
       if (recorded == BUFFER_BYTES) {
-        Serial.println("Audio: recording limit reached; release KEY1 to replay.");
+        finish_recording("5-second limit");
+      } else if (!started_from_voice &&
+                 vad.process(chunk, received, AUDIO_AI_MIC_CHANNEL, true) == AudioVad::Silence) {
+        finish_recording("silence");
       }
     } else if (state == State::Playing || state == State::Draining) {
-      const uint8_t *data = state == State::Playing ? record_buffer + played : silence;
+      const uint8_t *play_buffer = speech_buffer ? speech_buffer : record_buffer;
+      const uint8_t *data = state == State::Playing ? play_buffer + played : silence;
       size_t count = state == State::Playing ? min(CHUNK_BYTES, recorded - played) : CHUNK_BYTES;
       size_t written = 0;
       result = i2s_write(AUDIO_PORT, data, count, &written, pdMS_TO_TICKS(20));
@@ -145,6 +228,8 @@ void audio_task(void *) {
         // Push more silence than the entire TX DMA ring before muting the PA.
         if (silence_written >= 5 * CHUNK_BYTES) {
           digitalWrite(PIN_AUDIO_PA, LOW);
+          heap_caps_free(speech_buffer);
+          speech_buffer = nullptr;
           state = State::Idle;
           Serial.println("Audio: playback complete.");
         }
@@ -153,6 +238,7 @@ void audio_task(void *) {
     vTaskDelay(1);
   }
   digitalWrite(PIN_AUDIO_PA, LOW);
+  heap_caps_free(speech_buffer);
   i2s_driver_uninstall(AUDIO_PORT);
   heap_caps_free(record_buffer);
   record_buffer = nullptr;
@@ -170,7 +256,7 @@ bool init_audio() {
   // Shared with ToF: initialize before launching the audio task; codec writes
   // happen only here. 400 kHz is supported by both codecs and the ToF sensor.
   if (!Wire.begin(PIN_AUDIO_SDA, PIN_AUDIO_SCL) || !Wire.setClock(400000)) return false;
-  record_buffer = static_cast<uint8_t *>(heap_caps_malloc(BUFFER_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  record_buffer = static_cast<uint8_t *>(heap_caps_malloc(BUFFER_BYTES + PREROLL_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   if (!record_buffer) {
     Serial.println("Audio: cannot allocate recording buffer in PSRAM.");
     return false;
@@ -198,7 +284,15 @@ bool init_audio() {
   if (installed && i2s_set_pin(AUDIO_PORT, &pins) == ESP_OK &&
       i2s_zero_dma_buffer(AUDIO_PORT) == ESP_OK && init_codecs() &&
       xTaskCreate(audio_task, "audio", 4096, nullptr, 2, &audio_task_handle) == pdPASS) {
+    #if AUDIO_AI_REPLY_TEST
+    #if AUDIO_VOICE_ACTIVATION
+    Serial.println("Audio ready: speak to ask AI; KEY1 overrides. Stops on silence or at 5 seconds.");
+    #else
+    Serial.println("Audio ready: hold KEY1 to ask AI; release, silence, or time limit ends recording.");
+    #endif
+    #else
     Serial.println("Audio ready: hold KEY1 to record, release to replay.");
+    #endif
     return true;
   }
   if (installed) i2s_driver_uninstall(AUDIO_PORT);

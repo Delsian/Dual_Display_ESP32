@@ -1,7 +1,7 @@
 #ifndef AUDIO_H
 #define AUDIO_H
 
-// Starts the microphone/speaker task. Hold KEY1 to record, release to replay.
+// Starts voice/button capture; completed phrases upload or replay per AUDIO_AI_REPLY_TEST.
 // Returns false if disabled or initialization fails; other subsystems may run.
 bool init_audio();
 

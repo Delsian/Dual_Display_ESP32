@@ -6,6 +6,7 @@
 #include "drawing_tools.h"
 #include "wifi_setup.h"
 #include "device_config.h"
+#include "speech_test.h"
 
 namespace {
 std::atomic<bool> portal_active{false};
@@ -93,6 +94,7 @@ void wifi_task(void *) {
   size_t command_length = 0;
   bool command_overflow = false;
   Serial.println("Send wifi followed by Enter to change Wi-Fi.");
+  Serial.println("Send speech followed by Enter to test the AI voice output.");
 
   for (;;) {
     // Bound serial work so a continuous input stream cannot starve networking.
@@ -104,6 +106,8 @@ void wifi_task(void *) {
           startup_pending = false;
           connection_pending = false;
           start_portal();
+        } else if (!command_overflow && strcmp(command, "speech") == 0) {
+          request_speech_test();
         }
         command_length = 0;
         command_overflow = false;

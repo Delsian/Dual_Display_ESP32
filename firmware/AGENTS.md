@@ -1,11 +1,23 @@
-<!--
-SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
-SPDX-License-Identifier: Apache-2.0
--->
 
 # Agent Instructions
 
 Keep responses and context concise. Work only on the requested behavior.
+
+## Shared project context
+
+- Read [Doc/PROJECT.md](Doc/PROJECT.md) and [Doc/STATUS.md](Doc/STATUS.md)
+  before starting work. Inspect source only as needed for the current task.
+- After important changes to behavior, architecture, configuration, goals, or
+  validation results, update the relevant context files before finishing.
+- Keep stable goals and decisions in PROJECT.md; keep current implementation,
+  verified results, blockers, and next steps in STATUS.md. Date status updates.
+- Distinguish implemented, build-tested, and hardware-verified behavior. Treat
+  proposed work as pending, not as authorization to implement it.
+- Replace stale context rather than append a diary. Keep PROJECT.md about one
+  page and STATUS.md under 50 lines; link to detailed docs/source instead of
+  copying code or conversations. Never include credentials.
+- If context conflicts with source or new user instructions, verify and correct
+  it; context is a summary, not a replacement for either.
 
 ## Workflow
 

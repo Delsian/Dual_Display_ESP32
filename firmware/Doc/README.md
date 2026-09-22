@@ -2,6 +2,12 @@
 
 Hardware documentation for the Waveshare **ESP32-S3-DualEye-Touch-LCD-1.28** board.
 
+## Shared project context
+
+- [PROJECT.md](PROJECT.md) — goals, architecture, constraints, and source map.
+- [STATUS.md](STATUS.md) — current progress, validation, and pending work.
+- [SPEECH.md](SPEECH.md) — audio/AI operation and testing.
+
 ## Files
 
 - `ESP32-S3-DualEye-Touch-LCD-1.28-Schematic.pdf` - Board schematic and GPIO/peripheral wiring. Use this as the pinout reference.
