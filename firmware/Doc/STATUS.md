@@ -1,16 +1,14 @@
 # Current project status
 
-Updated: 2026-09-22. Scope: voice AI workflow.
+Updated: 2026-09-23. Scope: voice AI workflow.
 
 ## Implemented and validated
 
-- Microphone phrase → Worker `/ask` → Gemini text reply in serial works on
-  hardware, per user logs. Actual reply speech is now implemented locally.
+- Microphone → `/ask` → Gemini serial reply works on hardware, per user logs.
 - Reply speech: user logs confirm successful TTS and playback on hardware.
 - Keep-alive success confirmed in user logs; three-minute close validation pending.
 - Detailed Gemini headers/body and speech timing added; deployment and hardware
   timing validation pending. Mocked Worker timing checks passed.
-- Fixed-phrase `/test-speech` download and speaker playback work on hardware.
 - HTTPS connection reuse works: user logs showed zero connection setup time
   for reused connections, with total replies around 2.3–3.4 seconds in those
   samples. Fresh connection setup took about 2.8 seconds; timings vary.
@@ -18,9 +16,7 @@ Updated: 2026-09-22. Scope: voice AI workflow.
   80 ms onset, up to 200 ms pre-roll, 800 ms silence cutoff, five-second maximum
   including pre-roll, and one-second cooldown. KEY1 remains available.
 - Automatic capture pauses while offline, during requests and during playback.
-- Latest voice-activation firmware build passed. Native detector tests passed
-  with address/undefined-behavior sanitizers; WAV tests passed previously.
-  Individual hardware edge cases were not separately reported by the user.
+- Voice-activation build and sanitized detector tests passed; WAV tests passed previously.
 
 ## Current configuration and limits
 
@@ -39,11 +35,15 @@ Updated: 2026-09-22. Scope: voice AI workflow.
 
 ## Pending work
 
+- Pi Docker remains installed/running; Docker service/socket and containerd boot
+  startup disabled and verified (2026-09-23). Ollama qwen3:1.7b text-tested.
+  Ukrainian unreliable; warm replies 1–6 s, cold 25 s, with a two-CPU quota.
+  RAM limits are not enforced (missing memory cgroup); printer services active.
+  See [local deployment/results](../backend/local/README.md). Whisper, Piper,
+  firmware API/TLS integration and printing coexistence validation remain pending.
 - Upload keep-alive firmware; verify reuse after 30–60 seconds, close after three
   minutes, no further pings until a new request, and recovery after Wi-Fi loss.
 - User also requested exploring upload while recording and minimal model cost.
   Streaming and model changes remain pending; settle the approach before coding.
 - Validate each next step on hardware, including no speaker-triggered capture,
   cutoff behavior, background noise, and continued animation.
-- No blocker is currently reported. Read [SPEECH.md](SPEECH.md) for operating
-  steps and timing definitions; update this summary after important changes.
