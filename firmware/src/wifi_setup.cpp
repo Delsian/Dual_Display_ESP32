@@ -94,7 +94,7 @@ void wifi_task(void *) {
   size_t command_length = 0;
   bool command_overflow = false;
   Serial.println("Send wifi followed by Enter to change Wi-Fi.");
-  Serial.println("Send speech followed by Enter to test the AI voice output.");
+  Serial.println("Send speech [N|off_K] followed by Enter to play a local clip (random if omitted).");
 
   for (;;) {
     // Bound serial work so a continuous input stream cannot starve networking.
@@ -106,8 +106,9 @@ void wifi_task(void *) {
           startup_pending = false;
           connection_pending = false;
           start_portal();
-        } else if (!command_overflow && strcmp(command, "speech") == 0) {
-          request_speech_test();
+        } else if (!command_overflow && (strcmp(command, "speech") == 0 ||
+                                         strncmp(command, "speech ", 7) == 0)) {
+          request_speech_test(command[6] ? command + 7 : "");
         }
         command_length = 0;
         command_overflow = false;

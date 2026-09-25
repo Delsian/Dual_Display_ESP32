@@ -1,4 +1,5 @@
 .pio
+/data/clips/
 .dev.vars
 .dev.vars.*
 include/speech_secrets.h

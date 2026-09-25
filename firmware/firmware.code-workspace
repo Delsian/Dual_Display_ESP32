@@ -136,6 +136,22 @@
                 ]
             },
             {
+                "label": "Upload filesystem",
+                "type": "process",
+                "command": "${env:HOME}/.platformio/penv/bin/pio",
+                "args": [
+                    "run",
+                    "-e",
+                    "esp32-s3-dualeye-touch-lcd-1_28",
+                    "-t",
+                    "uploadfs"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                },
+                "problemMatcher": []
+            },
+            {
                 "label": "PlatformIO: Monitor",
                 "type": "process",
                 "command": "${env:HOME}/.platformio/penv/bin/pio",

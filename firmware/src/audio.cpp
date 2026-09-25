@@ -4,6 +4,7 @@
 #include "device_config.h"
 #include "speech_test.h"
 #include "audio_vad.h"
+#include "speech_clip.h"
 
 #if USE_AUDIO
 #include <Wire.h>
@@ -12,7 +13,7 @@
 
 namespace {
 constexpr i2s_port_t AUDIO_PORT = I2S_NUM_0;
-constexpr uint32_t SAMPLE_RATE = 16000; // Codec clock tables below require 16 kHz.
+constexpr uint32_t SAMPLE_RATE = 16000; // Recording rate; clips use 24 kHz.
 constexpr size_t FRAME_BYTES = 2 * sizeof(int16_t);
 constexpr size_t CHUNK_BYTES = 256 * FRAME_BYTES;
 constexpr size_t BUFFER_BYTES = SAMPLE_RATE * FRAME_BYTES * AUDIO_RECORD_SECONDS;
@@ -83,6 +84,17 @@ bool init_codecs() {
          configure_registers(MIC_ADDRESS, microphone);
 }
 
+bool set_audio_rate(uint32_t rate) {
+  // ES8311 uses the same 256x MCLK dividers at 16 and 24 kHz. RX is
+  // discarded during clip playback; restore its 16 kHz clock before capture.
+  if (i2s_set_clk(AUDIO_PORT, rate, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO) != ESP_OK ||
+      i2s_zero_dma_buffer(AUDIO_PORT) != ESP_OK) {
+    Serial.println("Audio: sample-rate change failed; audio task stopped.");
+    return false;
+  }
+  return true;
+}
+
 void audio_task(void *) {
   enum class State { Idle, Recording, Playing, Draining };
   State state = State::Idle;
@@ -92,7 +104,7 @@ void audio_task(void *) {
   size_t recorded = 0;
   size_t played = 0;
   size_t silence_written = 0;
-  uint8_t *speech_buffer = nullptr;
+  SpeechAudio *speech = nullptr; // Reply audio, possibly still downloading.
   uint8_t chunk[CHUNK_BYTES];
   const uint8_t silence[CHUNK_BYTES] = {};
   uint8_t *preroll = record_buffer + BUFFER_BYTES;
@@ -109,7 +121,7 @@ void audio_task(void *) {
     last_blocked = millis();
     #if AUDIO_AI_REPLY_TEST
     state = State::Idle;
-    request_audio_reply(record_buffer, recorded);
+    audio_reply_progress(recorded, true);
     #else
     played = 0;
     silence_written = 0;
@@ -142,25 +154,32 @@ void audio_task(void *) {
         }
         #endif
         digitalWrite(PIN_AUDIO_PA, LOW);
+        if (speech) {
+          if (!set_audio_rate(SAMPLE_RATE)) break;
+          received = 0; // This iteration's RX chunk used the playback clock.
+        }
         i2s_zero_dma_buffer(AUDIO_PORT);
-        heap_caps_free(speech_buffer);
-        speech_buffer = nullptr;
+        release_speech_audio(speech);
+        speech = nullptr;
         recorded = 0;
         vad.reset();
         pre_write = pre_used = 0;
         state = State::Recording;
         Serial.println("Audio: recording.");
+        #if AUDIO_AI_REPLY_TEST
+        begin_audio_reply(record_buffer); // Upload while recording.
+        #endif
       } else if (!stable_pressed && state == State::Recording) {
         finish_recording("KEY1 released");
       }
     }
 
     if (state == State::Idle && !stable_pressed) {
-      speech_buffer = take_speech_test(recorded);
-      if (speech_buffer) {
+      speech = take_speech_audio();
+      if (speech) {
         played = 0;
         silence_written = 0;
-        i2s_zero_dma_buffer(AUDIO_PORT);
+        if (!set_audio_rate(SPEECH_CLIP_SAMPLE_RATE)) break;
         digitalWrite(PIN_AUDIO_PA, HIGH);
         state = State::Playing;
         Serial.println("Speech: playing AI voice.");
@@ -194,6 +213,9 @@ void audio_task(void *) {
         state = State::Recording;
         started_from_voice = true;
         Serial.println("Audio: voice detected; recording.");
+        #if AUDIO_AI_REPLY_TEST
+        if (begin_audio_reply(record_buffer)) audio_reply_progress(recorded, false);
+        #endif
       }
     }
     #endif
@@ -203,6 +225,9 @@ void audio_task(void *) {
         size_t count = min(received, BUFFER_BYTES - recorded);
         memcpy(record_buffer + recorded, chunk, count);
         recorded += count;
+        #if AUDIO_AI_REPLY_TEST
+        if (recorded < BUFFER_BYTES) audio_reply_progress(recorded, false);
+        #endif
       }
       if (recorded == BUFFER_BYTES) {
         finish_recording("5-second limit");
@@ -211,9 +236,16 @@ void audio_task(void *) {
         finish_recording("silence");
       }
     } else if (state == State::Playing || state == State::Draining) {
-      const uint8_t *play_buffer = speech_buffer ? speech_buffer : record_buffer;
+      size_t available = recorded;
+      bool done = true;
+      const uint8_t *play_buffer = speech ? speech_audio_data(speech, available, done) : record_buffer;
+      if (state == State::Playing && played == available) {
+        // Wait for more download; TX auto-clear plays silence meanwhile.
+        if (!done) { vTaskDelay(1); continue; }
+        state = State::Draining;
+      }
       const uint8_t *data = state == State::Playing ? play_buffer + played : silence;
-      size_t count = state == State::Playing ? min(CHUNK_BYTES, recorded - played) : CHUNK_BYTES;
+      size_t count = state == State::Playing ? min(CHUNK_BYTES, available - played) : CHUNK_BYTES;
       size_t written = 0;
       result = i2s_write(AUDIO_PORT, data, count, &written, pdMS_TO_TICKS(20));
       if (result != ESP_OK || written == 0 || written % FRAME_BYTES != 0) {
@@ -222,14 +254,14 @@ void audio_task(void *) {
       }
       if (state == State::Playing) {
         played += written;
-        if (played == recorded) state = State::Draining;
       } else {
         silence_written += written;
         // Push more silence than the entire TX DMA ring before muting the PA.
         if (silence_written >= 5 * CHUNK_BYTES) {
           digitalWrite(PIN_AUDIO_PA, LOW);
-          heap_caps_free(speech_buffer);
-          speech_buffer = nullptr;
+          if (speech && !set_audio_rate(SAMPLE_RATE)) break;
+          release_speech_audio(speech);
+          speech = nullptr;
           state = State::Idle;
           Serial.println("Audio: playback complete.");
         }
@@ -238,7 +270,7 @@ void audio_task(void *) {
     vTaskDelay(1);
   }
   digitalWrite(PIN_AUDIO_PA, LOW);
-  heap_caps_free(speech_buffer);
+  release_speech_audio(speech);
   i2s_driver_uninstall(AUDIO_PORT);
   heap_caps_free(record_buffer);
   record_buffer = nullptr;

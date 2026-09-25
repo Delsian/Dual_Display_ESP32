@@ -1,9 +1,36 @@
 # Audio and AI tests
 
+## Prerecorded topic replies
+
+The firmware sends recordings to `/intent`. Gemini picks one
+topic from `backend/topics.json`; the device plays that answer from LittleFS.
+Off-topic questions play a random fallback; noise plays nothing. The Worker has
+no TTS: all speech is prerecorded. To test clips without the network, send
+`speech 12` (clips/012.wav), `speech off_3`, or `speech` (random) on serial.
+
+1. Edit `backend/topics.json`: `id` (1–999), `topic` (description Gemini matches
+   against; English is fine) and `answer` (Ukrainian text to voice), plus `fallbacks`.
+2. Produce audio externally (any ffmpeg format), name it `idN.*` (topic N) or
+   `fbN.*` (fallback N) in `phrases/`, and run `python3 backend/convert_phrases.py`.
+   It writes 24 kHz mono IMA ADPCM `data/clips/NNN.wav` and `off_K.wav`, trims edge silence
+   (`--max-pause=0.4` also shortens inner pauses), normalizes loudness, rejects
+   clips over 10 s, lists missing clips, reports LittleFS usage, and regenerates the
+   Worker topic block (descriptions and fallback count only; answers stay local).
+3. Deploy `backend/worker.mjs`, run PlatformIO *Upload Filesystem Image*, then
+   upload the firmware.
+   Regenerate old 16 kHz clips before uploading; the decoder requires 24 kHz.
+   Clip playback uses 24 kHz; recording and microphone loopback remain 16 kHz.
+4. Expect `AI reply: <answer>` and `Speech timing: clip=NNN, ..., total=...` (ms
+   since recording ended). A missing clip prints `Speech: /clips/... missing`.
+
+Improve a misclassified question by rewording topic descriptions. Tests:
+`node --test test/worker_test.mjs test/worker_intent_test.mjs`, and
+`g++ -std=c++11 -Wall -Wextra -Werror -Iinclude src/speech_clip.cpp test/speech_clip_test.cpp -o /tmp/speech_clip_test && /tmp/speech_clip_test`.
+
 ## Microphone to AI voice reply
 
-Deploy the current `backend/worker.mjs` first; it provides protected `/ask` and `/speak`.
-Then upload the firmware normally, without uploading the filesystem.
+Deploy the current `backend/worker.mjs` first; it provides protected `/intent`,
+`/ask` and `/test-ai` (no TTS). Upload the filesystem image and firmware.
 
 `/ask` system instructions allow English and Ukrainian replies only.
 Unrecognized or absent speech is ignored: Gemini's `[IGNORE]` marker becomes
@@ -18,19 +45,9 @@ to apply instruction changes, then test both allowed languages and another langu
 1. Wait for Wi-Fi to connect and open serial at 115200 baud.
 2. Wait one second, then speak a short question without pressing KEY1.
    Recording stops after 800 ms of silence or at five seconds, including pre-roll.
-3. Expect `AI: uploading ... ms of microphone audio.`, `AI: HTTP 200`, then
-   `AI reply: ...`, `Speech: requesting AI reply voice.`, `Speech: HTTP 200`,
-   and `Speech: playing AI voice.` Listen for the actual answer.
-4. Verify a relevant reply, continued eye animation, and the `speech` command.
-
-The firmware sends the printed answer to `/speak` as JSON text. This adds a TTS
-provider call and generation/download latency after the text reply. The existing
-voice model, Kore voice, and ten-second WAV limit are reused. Replies are prompted
-to stay within 20 words; oversized or invalid generated audio is rejected, not
-truncated. If TTS fails, the serial text remains available and capture resumes.
-Test English and Ukrainian questions, no self-triggering during speaker playback,
-and the ability to ask another question after the cooldown. Timing labeled `AI`
-still measures the text reply only, excluding subsequent speech generation.
+3. Expect `AI: HTTP 200`, `AI reply: <topic description>`, `Speech timing: clip=...`,
+   then `Speech: playing AI voice.` Listen for the matching clip.
+4. Verify a relevant clip and continued eye animation.
 
 Voice activation keeps up to 200 ms of pre-roll and requires 80 ms above an
 adaptive sound-level threshold. It pauses during requests and playback, while
@@ -50,11 +67,15 @@ seconds, controlled by `AUDIO_RECORD_SECONDS`.
 
 For hardware validation, check that quiet does not trigger, speech starts capture,
 an 800 ms pause stops it, and continuous speech stops at five seconds. Check that
-playback does not trigger a recording and KEY1 still works. Only a firmware upload
-is needed for this change; the Worker and filesystem are unchanged. Upload still
-begins after recording stops.
+playback does not trigger a recording and KEY1 still works.
 
-The recording is copied into a mono 16 kHz PCM WAV before the upload task starts.
+Upload starts when recording starts. The network task sends the selected channel
+from the recording buffer as 128 ms HTTP chunks of
+`audio/L16; rate=16000; channels=1; endianness=little-endian`. The final chunk
+follows the silence cutoff, so connection setup and upload overlap speech. The
+Worker adds the WAV header; `/ask` and `/intent` also accept `audio/wav`.
+A recording under 0.25 s, or a failed write, closes the socket before the final
+chunk, so the Worker rejects the body without calling Gemini.
 A new recording cannot overwrite an in-flight upload. Only one network request
 or pending speech response is allowed at a time; a busy request is rejected and
 is not sent later. Errors are reported on serial; retry manually. Each question
@@ -67,22 +88,11 @@ with real recordings, especially near the 30-second limit.
 
 ## Measure response latency
 
-Detailed diagnostics require both the updated Worker and firmware:
-- `AI Worker timing: gemini_headers` measures the provider request until headers;
-  `gemini_body` measures reading and parsing the provider JSON afterward.
-- `Speech Worker timing` reports the same split through the `Server-Timing`
-  header, plus `worker_total` including preparation of the WAV response.
-- `Speech timing: post_to_headers` measures the ESP32 TTS POST until headers,
-  excluding separately logged connection setup. `response_body` covers WAV
-  allocation/download and intervening logging. `convert` includes connection
-  cleanup, WAV validation, PCM allocation, and resampling. `total` covers the
-  speech operation from network preparation until PCM is ready, excluding
-  waiting for the audio task and playback itself.
-
-Provider header timing includes networking and server processing; it cannot
-separate model inference from provider queueing. Worker timings overlap device
-timings and must not be added to them. Missing headers on an older Worker do not
-prevent playback. Compare several questions to assess variability.
+`Speech timing: clip=... total=` is the time from the end of recording until the
+clip is decoded and handed to the audio task, the main latency figure.
+`AI Worker timing:` reports `gemini_headers`, `gemini_body`, `upload_prepare`,
+`gemini` and `worker_total`. Provider header timing includes networking and
+queueing, not only inference. Worker timings overlap device timings; do not add them.
 
 Deploy the updated Worker and upload firmware, then ask the same short question
 three times within a minute. Copy the `HTTP timing:`, `AI timing:` and
@@ -90,9 +100,9 @@ three times within a minute. Copy the `HTTP timing:`, `AI timing:` and
 The first request may include NTP clock synchronization, so keep it separate
 from subsequent requests when comparing results.
 
-- `prepare`: local WAV allocation and microphone channel extraction.
-- `task_wait`: time until the background upload task starts.
-- `network_ready`: Wi-Fi check and any clock synchronization.
+- `task_wait`, `network_ready`: measured from recording start (streaming upload).
+- `upload_tail`: recording end until the final chunk was written; near zero
+  means the upload kept up with recording. `total` counts from recording end.
 - HTTP `connection`: DNS, TCP and certificate-validated TLS setup. `reused=yes`
   means an existing socket was available before this check; its time should
   usually be near zero. A peer can still close the socket immediately afterward.
@@ -105,7 +115,8 @@ from subsequent requests when comparing results.
 - `total`: elapsed time from the upload request when recording stops until the reply
   is ready to print; excludes the recording itself and serial reply printing.
 - Worker `upload_prepare`: receiving, validating and base64-encoding the WAV
-  after the Worker handler begins; excludes any earlier network buffering.
+  after the Worker handler begins. With streaming upload it includes most of the
+  recording duration, which is expected.
 - Worker `gemini`: sending the Gemini request and receiving/parsing its full
   response, including network time, not just model inference.
 - Worker `worker_total`: time in the handler until preparing the JSON response.
@@ -115,8 +126,7 @@ duration; do not add them together. Worker clocks can have coarse resolution
 between I/O events, so small processing times are approximate. An older Worker
 still works but the firmware reports that Worker timings are unavailable.
 
-One persistent network task owns the HTTPS client for `/ask`, `/speak`, and
-`/test-speech`. Complete responses allow HTTP keep-alive reuse. While idle, it
+One persistent network task owns the HTTPS client for Worker requests. Complete responses allow HTTP keep-alive reuse. While idle, it
 sends `GET /health` on an existing connection every 25 seconds and consumes the
 response. These requests do not call Gemini or extend the inactivity window.
 The connection closes after three minutes since the last user network job
@@ -134,47 +144,14 @@ After flashing, check three consecutive questions for `reused=yes` after the
 first, then wait 30–60 seconds and check keep-alive logs and connection reuse.
 Wait over three minutes after a completed request: expect a close log, no further
 pings, and a fresh connection on the next question. No Worker redeployment is needed.
-Also test a Wi-Fi disconnect/reconnect and the `speech` command followed by a
-question. These require hardware; a successful build cannot establish the
+Also test a Wi-Fi disconnect/reconnect followed by a question. These require hardware; a successful build cannot establish the
 latency improvement or the server's connection retention behavior.
 
-## Fixed-phrase voice playback test
-
-The deployed Worker must provide the authenticated `POST /test-speech` endpoint.
-It returns a WAV of the AI-generated phrase "Parrot is ready."
+## Device token
 
 The local, ignored `include/speech_secrets.h` contains `SPEECH_DEVICE_TOKEN`,
-matching the Worker's `DEVICE_TOKEN`. It was populated from `.dev.vars` for this
-checkout. Update this header too if the device token changes. The device token
-is embedded in the firmware binary; keep that binary private. The Gemini key
-is never included in firmware. Without the local header, the speech test is disabled.
-
-1. Build and upload firmware (no filesystem upload is needed):
-   `pio run -e esp32-s3-dualeye-touch-lcd-1_28 -t upload`
-2. Open the serial monitor at 115200 baud and wait for Wi-Fi to connect.
-3. Send `speech` followed by Enter.
-4. Expect `Speech: HTTP 200`, then `Speech: playing AI voice.` and
-   `Audio: playback complete.` Listen for the spoken phrase at normal speed.
-5. Check eye animation continues during the request. Pressing KEY1 interrupts
-   speech playback and starts recording for the configured KEY1 mode.
-
+matching the Worker's `DEVICE_TOKEN`. Update it if the device token changes. The
+token is embedded in the firmware binary; keep that binary private. The Gemini key
+is never included in firmware. Without the local header, AI requests are disabled.
 The network task checks HTTPS certificates using ISRG roots and synchronizes time
-with NTP when needed. A bounded PSRAM buffer holds up to ten seconds of WAV audio.
-The response is low-pass filtered and resampled from 24 kHz mono to the existing
-16 kHz stereo I2S format. Playback waits until microphone recording/replay is idle.
-Only one download/pending response is allowed; repeated commands report busy.
-
-An offline request or HTTP failure leaves the audio task available.
-An invalid token returns HTTP 401; quota exhaustion returns HTTP 429. A clock
-sync failure is reported without disabling certificate validation. Send `speech`
-again after resolving the problem; requests are not automatically retried.
-
-Host validation of WAV rejection, channel duplication, duration, and anti-alias
-filtering:
-
-```sh
-g++ -std=c++11 -Wall -Wextra -Werror -Iinclude src/speech_wav.cpp test/speech_wav_test.cpp -o /tmp/speech_wav_test
-/tmp/speech_wav_test
-```
-
-The `speech` command tests fixed speech playback only and does not upload audio.
+with NTP when needed.

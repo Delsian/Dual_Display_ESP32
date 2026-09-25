@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parrot · Online services</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: light-dark(#f4f6fa, #111827); color: light-dark(#172033, #e5eaf3); }
+    main { max-width: 1000px; margin: auto; padding: 40px 24px; }
+    h1 { margin-bottom: 8px; } h2 { margin-top: 0; font-size: 1.25rem; }
+    p { line-height: 1.6; } .muted { color: light-dark(#526079, #a9b6cb); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 20px; }
+    section { background: light-dark(white, #1c2638); border: 1px solid light-dark(#dce2eb, #344057); border-radius: 14px; padding: 24px; }
+    ul { padding-left: 20px; } li { margin: 14px 0; line-height: 1.5; }
+    a { color: light-dark(#174fb5, #95bcff); text-underline-offset: 3px; }
+    a:focus-visible { outline: 3px solid #e2a62a; outline-offset: 4px; }
+    small { display: block; margin-top: 4px; line-height: 1.5; }
+    code { overflow-wrap: anywhere; } footer { margin-top: 24px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="muted">PARROT / ESP32 VOICE COMPANION</p>
+    <h1>Online services</h1>
+    <p>Dashboards, billing, quotas, and logs for the cloud voice workflow.</p>
+    <p class="muted">Sign in and select the correct Cloudflare account or Google Cloud project.
+      Gemini and Cloud TTS may use different projects. Links below do not contain credentials.</p>
+  </header>
+  <div class="grid">
+    <section>
+      <h2>Cloudflare Workers</h2>
+      <p>Hosts the <code>parrot</code> backend and device authentication.</p>
+      <ul>
+        <li><a href="https://dash.cloudflare.com/">Worker dashboard, deployments &amp; secrets</a>
+          <small>Account → Workers &amp; Pages → parrot. Use Settings for secrets and Edit code for deployment.</small></li>
+        <li><a href="https://dash.cloudflare.com/">Worker logs &amp; metrics</a>
+          <small>Open parrot → Observability. Historical logs depend on logging configuration; use live logs when available.</small></li>
+        <li><a href="https://dash.cloudflare.com/">Cloudflare billing</a>
+          <small>Account → Billing. Account-specific links require your account ID.</small></li>
+        <li><a href="https://parrot.eug-krashtan.workers.dev/health">Parrot health endpoint</a>
+          <small>Checks that required secrets exist; does not verify provider credentials or remaining quota.</small></li>
+        <li><a href="https://developers.cloudflare.com/workers/platform/pricing/">Workers pricing</a></li>
+        <li><a href="https://www.cloudflarestatus.com/">Cloudflare service status</a></li>
+      </ul>
+    </section>
+    <section>
+      <h2>Gemini / Google AI Studio</h2>
+      <p>Understands recorded speech and generates the text answer for <code>/ask</code>.</p>
+      <ul>
+        <li><a href="https://aistudio.google.com/">AI Studio</a></li>
+        <li><a href="https://aistudio.google.com/apikey">Gemini API keys &amp; projects</a></li>
+        <li><a href="https://aistudio.google.com/usage">Usage dashboard</a></li>
+        <li><a href="https://ai.dev/rate-limit">Active rate limits &amp; quotas</a>
+          <small>Check the selected model and project when Gemini returns HTTP 429.</small></li>
+        <li><a href="https://console.cloud.google.com/billing">Gemini project billing</a>
+          <small>Select the billing account linked to the Gemini key's project.</small></li>
+        <li><a href="https://ai.google.dev/gemini-api/docs/pricing">Gemini API pricing</a></li>
+        <li><a href="https://aistudio.google.com/">Request logs, where enabled</a>
+          <small>Check AI Studio's logging controls. Usage metrics are not a transcript of every request; provider payloads are not logged by this Worker.</small></li>
+        <li><a href="https://aistudio.google.com/status">Gemini API service status</a></li>
+      </ul>
+    </section>
+    <section>
+      <h2>Google Cloud Text-to-Speech</h2>
+      <p>Standard voices generate audio for <code>/speak</code> and <code>/test-speech</code>.</p>
+      <ul>
+        <li><a href="https://console.cloud.google.com/apis/library/texttospeech.googleapis.com">Enable / manage Cloud TTS API</a></li>
+        <li><a href="https://console.cloud.google.com/apis/credentials">API keys &amp; restrictions</a></li>
+        <li><a href="https://console.cloud.google.com/apis/api/texttospeech.googleapis.com/metrics">TTS requests, errors &amp; latency</a></li>
+        <li><a href="https://console.cloud.google.com/apis/api/texttospeech.googleapis.com/quotas">TTS quotas</a></li>
+        <li><a href="https://console.cloud.google.com/billing">Billing, cost reports &amp; budgets</a>
+          <small>Select a billing account, then Reports or Budgets &amp; alerts. Budget alerts do not cap spending.</small></li>
+        <li><a href="https://console.cloud.google.com/logs/query">Cloud Logging / Logs Explorer</a>
+          <small>Select the TTS project. Available entries depend on supported audit logs and logging configuration; synthesized audio and request text are not guaranteed to appear.</small></li>
+        <li><a href="https://cloud.google.com/text-to-speech/pricing">TTS pricing &amp; free allowance</a></li>
+        <li><a href="https://cloud.google.com/text-to-speech/docs/voices">Voice catalog</a></li>
+        <li><a href="https://status.cloud.google.com/">Google Cloud service status</a></li>
+      </ul>
+    </section>
+  </div>
+  <footer>
+    <p><strong>Device logs:</strong> ESP32 audio, download, conversion and connection timings
+      are available through the local serial monitor, not an online dashboard.</p>
+    <p><a href="SPEECH.md">Speech setup &amp; troubleshooting</a> ·
+      <a href="STATUS.md">Project status</a> · <a href="PROJECT.md">Project overview</a></p>
+    <p class="muted">Created 2026-09-23. Console links require login; navigation can change.
+      This page opens locally and makes no API calls.</p>
+  </footer>
+</main>
+</body>
+</html>

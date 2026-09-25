@@ -1,50 +1,127 @@
 // Deploy this module through Cloudflare Workers > parrot > Edit code.
 const MODEL = "gemini-3.6-flash";
-const TTS_MODEL = "gemini-2.5-flash-preview-tts";
 
-async function speechText(request) {
-  if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") {
-    return { error: "Expected application/json", status: 415 };
+// BEGIN GENERATED TOPICS: edit backend/topics.json, then run backend/convert_phrases.py.
+const TOPICS = [
+  [1, "Weather, appearance, color, what can be seen, visible things"],
+  [2, "Rain, sea, water, swimming, being wet"],
+  [3, "Heat, cold, temperature, hot or cold weather"],
+  [4, "Wind, storm, hurricane, bad weather, strong wind"],
+  [5, "Time, current time, what time it is, hours and minutes"],
+  [6, "Date, day, calendar, today, tomorrow, yesterday"],
+  [7, "Location, where we are, where something is, direction"],
+  [8, "Distance, how far, how close, nearby places"],
+  [9, "Navigation, route, directions, where to go, how to get somewhere"],
+  [10, "Maps, coordinates, compass, orientation, finding direction"],
+  [11, "Sea, ocean, waves, large bodies of water"],
+  [12, "Ships, boats, vessels, sailing ships, ship construction"],
+  [13, "Pirates, piracy, corsairs, buccaneers, pirate life"],
+  [14, "Captain, leadership, commanding a ship, giving orders"],
+  [15, "Long John Silver, John Silver, Silver, the parrot's owner"],
+  [16, "Captain Flint, the parrot's name, who the parrot is, questions about the parrot itself"],
+  [17, "Parrot age, birthday, how old Captain Flint is"],
+  [18, "Parrot appearance, looks, feathers, color, beauty, what Captain Flint looks like"],
+  [19, "Birds, parrots, flying, feathers, other bird species"],
+  [20, "Animals, wild animals, pets, animal behavior"],
+  [21, "Fish, marine animals, sea creatures, creatures living underwater"],
+  [22, "Sharks, dangerous animals, predators, dangerous sea creatures"],
+  [23, "Food, eating, meals, what to eat, hunger"],
+  [24, "Taste, whether food is tasty, good or bad food, favorite food"],
+  [25, "Rum, alcohol, beer, wine, drinking, alcoholic beverages"],
+  [26, "Water, drinks, thirst, what to drink, non-alcoholic beverages"],
+  [27, "Money, price, cost, gold, coins, wealth, treasure value"],
+  [28, "Treasure, gold treasure, treasure hunting, hidden riches"],
+  [29, "Where treasure is hidden, treasure maps, clues, finding treasure"],
+  [30, "Weapons, sword, saber, pistol, musket, cannon, how weapons work"],
+  [31, "Fight, combat, fighting, who is stronger, physical confrontation"],
+  [32, "Danger, safety, risk, whether something is safe or dangerous"],
+  [33, "Advice, what should I do, recommendations, asking what action to take"],
+  [34, "Can something be done, possibility, permission, whether something is possible"],
+  [35, "How to do something, instructions, procedure, practical tasks"],
+  [36, "Why something happened, causes, reasons, explanation of an event"],
+  [37, "Who is responsible, whose fault it is, blame, responsibility"],
+  [38, "Yes or no questions, confirmation, whether something is true"],
+  [39, "Choosing between two or more options, which one to buy, which is better"],
+  [40, "Mathematics, numbers, counting, calculations, arithmetic"],
+  [41, "Science, physics, chemistry, biology, scientific explanations"],
+  [42, "Technology, machines, mechanisms, engines, devices, repairing things"],
+  [43, "Computers, programming, software, operating systems, computer problems"],
+  [44, "Phones, internet, social networks, modern communications, modern technology"],
+  [45, "Medicine, health, injuries, pain, illness, feeling sick"],
+  [46, "Clothes, clothing, what to wear, fashion, shoes"],
+  [47, "Love, romance, relationships, dating, marriage"],
+  [48, "Intelligence, stupidity, difficult questions, complicated explanations"],
+  [49, "Books, history, literature, knowledge, education, learning"],
+  [50, "Greetings, hello, how are you, small talk, casual conversation"],
+];
+const FALLBACK_CLIPS = 10;
+// END GENERATED TOPICS
+
+// /intent picks a prerecorded clip: topic N plays clips/NNN.wav, off-topic
+// questions play a random clips/off_K.wav, and noise plays nothing.
+function intentBody(recording) {
+  const topics = TOPICS.map(([id, topic]) => `${id}: ${topic}`).join("\n");
+  return {
+    systemInstruction: { parts: [{ text:
+      "Classify the user's spoken question, usually in Ukrainian, into exactly one topic by its number. " +
+      "Choose the topic whose description matches the question's meaning, not just shared words. " +
+      "Output offtopic for understandable speech that matches no topic. " +
+      "Output ignore for silence, noise, or speech you cannot understand confidently.\n\nTopics:\n" + topics,
+    }] },
+    contents: [{ parts: [{ text: "Classify this spoken question." }, recording] }],
+    generationConfig: {
+      responseMimeType: "text/x.enum",
+      responseSchema: { type: "STRING", enum: [...TOPICS.map(([id]) => String(id)), "offtopic", "ignore"] },
+      maxOutputTokens: 16,
+      thinkingConfig: { thinkingLevel: "minimal" },
+    },
+  };
+}
+
+// `text` is only for serial logs: the topic description, or the label.
+function intentReply(label) {
+  if (label === "ignore") return { clip: "", text: "", ignored: true };
+  if (label === "offtopic" && FALLBACK_CLIPS > 0) {
+    return { clip: `off_${1 + Math.floor(Math.random() * FALLBACK_CLIPS)}`, text: "offtopic", topic: "offtopic" };
   }
-  if (!request.body) return { error: "Missing text", status: 400 };
-  const reader = request.body.getReader();
-  let size = 0;
-  const chunks = [];
-  let expired = false;
-  const timer = setTimeout(() => { expired = true; reader.cancel().catch(() => {}); }, 15000);
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.length;
-      if (size > 8192) {
-        await reader.cancel();
-        return { error: "Text request too large", status: 413 };
-      }
-      chunks.push(value);
-    }
-    if (expired) return { error: "Text upload timed out", status: 408 };
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-    const data = JSON.parse(new TextDecoder().decode(bytes));
-    if (typeof data?.text !== "string" || !data.text.trim() || data.text.length > 1000) {
-      return { error: "Expected 1-1000 characters of text", status: 400 };
-    }
-    return { text: data.text.trim() };
-  } catch {
-    return { error: "Invalid text request", status: 400 };
-  } finally {
-    clearTimeout(timer);
-    reader.releaseLock();
-  }
+  const topic = TOPICS.find(([id]) => String(id) === label);
+  return topic && { clip: String(topic[0]).padStart(3, "0"), text: topic[1], topic: topic[0] };
+}
+
+// Canonical header for 16 kHz mono 16-bit PCM.
+function wavHeader(wav, pcmBytes) {
+  const view = new DataView(wav.buffer, wav.byteOffset);
+  const label = (offset, text) => {
+    for (let i = 0; i < text.length; i++) wav[offset + i] = text.charCodeAt(i);
+  };
+  label(0, "RIFF");
+  view.setUint32(4, 36 + pcmBytes, true);
+  label(8, "WAVEfmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 16000, true);
+  view.setUint32(28, 32000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  label(36, "data");
+  view.setUint32(40, pcmBytes, true);
 }
 
 async function recordingPart(request) {
-  const limit = 960044; // 30 seconds, 16 kHz mono PCM plus canonical WAV header.
-  if (request.headers.get("Content-Type")?.split(";")[0] !== "audio/wav") {
+  // Streaming firmware sends raw PCM while recording, so its length is unknown
+  // until the chunked body ends; the Worker adds the WAV header afterward.
+  const [type, ...params] = (request.headers.get("Content-Type") ?? "").toLowerCase().split(";").map(x => x.trim());
+  const raw = type === "audio/l16";
+  // L16 is big-endian by default; firmware declares its little-endian samples.
+  if (raw && !["rate=16000", "channels=1", "endianness=little-endian"].every(p => params.includes(p))) {
+    return { error: "Expected little-endian audio/L16 at 16 kHz mono", status: 415 };
+  }
+  if (!raw && type !== "audio/wav") {
     return { error: "Expected audio/wav", status: 415 };
   }
+  const header = raw ? 44 : 0;
+  const limit = 960044 - header; // 30 seconds, 16 kHz mono PCM plus canonical WAV header.
   if (Number(request.headers.get("Content-Length")) > limit) {
     return { error: "Recording exceeds 30 seconds", status: 413 };
   }
@@ -70,9 +147,13 @@ async function recordingPart(request) {
     clearTimeout(timer);
     reader.releaseLock();
   }
-  const wav = new Uint8Array(size);
-  let offset = 0;
+  const wav = new Uint8Array(header + size);
+  let offset = header;
   for (const chunk of chunks) { wav.set(chunk, offset); offset += chunk.length; }
+  if (raw) {
+    wavHeader(wav, size);
+    size += header;
+  }
   const view = new DataView(wav.buffer);
   const label = (pos, text) => [...text].every((c, i) => wav[pos + i] === c.charCodeAt(0));
   if (size < 8044 || !label(0, "RIFF") || !label(8, "WAVEfmt ") || !label(36, "data") ||
@@ -90,45 +171,38 @@ async function recordingPart(request) {
   return { inlineData: { mimeType: "audio/wav", data: btoa(binary.join("")) } };
 }
 
-function speechResponse(data) {
-  const candidate = data.candidates?.[0];
-  const audioParts = (candidate?.content?.parts ?? []).filter(part => part.inlineData);
-  const audio = audioParts[0]?.inlineData;
-  if (candidate?.finishReason !== "STOP" || audioParts.length !== 1 ||
-      audio?.mimeType !== "audio/L16;codec=pcm;rate=24000" ||
-      typeof audio.data !== "string" || !audio.data.length || audio.data.length > 640000) {
-    return json({ ok: false, error: "Gemini returned missing, incomplete, or unsupported audio" }, 502);
+// One provider POST with a timeout; failures never expose provider bodies or credentials.
+async function callGoogle(url, key, body, provider, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const started = Date.now();
+  const result = { headers_ms: 0, body_ms: 0, total_ms: 0 };
+  try {
+    const upstream = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    result.headers_ms = result.total_ms = Date.now() - started;
+    if (!upstream.ok) {
+      result.failure = { ok: false, error: `${provider} request failed`, upstream_status: upstream.status };
+      result.status = upstream.status === 429 ? 429 : 502;
+      return result;
+    }
+    result.data = await upstream.json();
+    result.total_ms = Date.now() - started;
+    result.body_ms = result.total_ms - result.headers_ms;
+    return result;
+  } catch {
+    result.total_ms = Date.now() - started;
+    const aborted = controller.signal.aborted;
+    result.failure = { ok: false, error: aborted ? `${provider} timed out` : `${provider} connection or response failed` };
+    result.status = aborted ? 504 : 502;
+    return result;
+  } finally {
+    clearTimeout(timeout);
   }
-  const pcm = atob(audio.data);
-  if (!pcm.length || pcm.length % 2 !== 0 || pcm.length > 480000) {
-    return json({ ok: false, error: "Invalid audio length" }, 502);
-  }
-  // Wrap at most 10 seconds of 24 kHz mono PCM in a WAV header; no resampling.
-  const wav = new Uint8Array(44 + pcm.length);
-  const view = new DataView(wav.buffer);
-  const label = (offset, text) => {
-    for (let i = 0; i < text.length; i++) wav[offset + i] = text.charCodeAt(i);
-  };
-  label(0, "RIFF");
-  view.setUint32(4, 36 + pcm.length, true);
-  label(8, "WAVEfmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, 24000, true);
-  view.setUint32(28, 48000, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  label(36, "data");
-  view.setUint32(40, pcm.length, true);
-  for (let i = 0; i < pcm.length; i++) wav[44 + i] = pcm.charCodeAt(i);
-  return new Response(wav, {
-    headers: {
-      "Content-Type": "audio/wav",
-      "Content-Disposition": 'attachment; filename="parrot-test.wav"',
-      "Cache-Control": "no-store",
-    },
-  });
 }
 
 function json(data, status = 200) {
@@ -138,13 +212,14 @@ function json(data, status = 200) {
   });
 }
 
+const PATHS = ["/health", "/test-ai", "/ask", "/intent"];
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+
 export default {
   async fetch(request, env) {
     const started = Date.now();
     const path = new URL(request.url).pathname;
-    if (path !== "/health" && path !== "/test-ai" && path !== "/test-speech" && path !== "/ask" && path !== "/speak") {
-      return json({ error: "Not found" }, 404);
-    }
+    if (!PATHS.includes(path)) return json({ error: "Not found" }, 404);
     const method = path === "/health" ? "GET" : "POST";
     if (request.method !== method) {
       return new Response("Method not allowed", {
@@ -161,7 +236,9 @@ export default {
       return json({ error: "Unauthorized" }, 401);
     }
 
-    const ask = path === "/ask";
+    // /ask answers one recorded phrase; /intent picks a prerecorded clip for it.
+    const intent = path === "/intent";
+    const ask = path === "/ask" || intent;
     const timing = { upload_prepare_ms: 0, gemini_ms: 0, gemini_headers_ms: 0, gemini_body_ms: 0 };
     const reply = (data, status = 200) => json(ask ? {
       ...data, timing_ms: { ...timing, worker_total_ms: Date.now() - started },
@@ -173,29 +250,16 @@ export default {
       timing.upload_prepare_ms = Date.now() - uploadStarted;
       if (recording.error) return reply({ ok: false, error: recording.error }, recording.status);
     }
-    // Test endpoints use fixed prompts; /ask answers one recorded phrase.
-    const speech = path === "/test-speech" || path === "/speak";
-    let spokenText = "Parrot is ready.";
-    if (path === "/speak") {
-      const input = await speechText(request);
-      if (input.error) return json({ ok: false, error: input.error }, input.status);
-      spokenText = input.text;
-    }
-    const model = speech ? TTS_MODEL : MODEL;
-    const body = speech ? {
-      contents: [{ parts: [{ text: `Speak like a playful talking parrot: a high-pitched, bright, slightly raspy voice, with bouncy rhythm and crisp pronunciation. Keep every word understandable. Read only the text below, without translating, repeating, adding words, or making bird sounds:\n${spokenText}` }] }],
-      generationConfig: {
-        responseModalities: ["AUDIO"],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } },
-      },
-    } : {
+    const body = {
       contents: [{ parts: [{ text: "Reply with exactly: Parrot is ready." }] }],
       generationConfig: {
         maxOutputTokens: 256,
         thinkingConfig: { thinkingLevel: "minimal" },
       },
     };
-    if (ask) {
+    if (intent) {
+      Object.assign(body, intentBody(recording));
+    } else if (ask) {
       body.systemInstruction = { parts: [{ text:
         "Respond in English and Ukrainian only. Use the user's language when it is English or Ukrainian. " +
         "For any other language, ask in English to speak English or Ukrainian. " +
@@ -208,61 +272,27 @@ export default {
         recording,
       ] }];
     }
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), speech || ask ? 45000 : 20000);
-    const geminiStarted = Date.now();
-    try {
-      const upstream = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": env.GEMINI_API_KEY,
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        }
-      );
-      const geminiHeadersAt = Date.now();
-      timing.gemini_headers_ms = geminiHeadersAt - geminiStarted;
-      timing.gemini_ms = timing.gemini_headers_ms;
-      if (!upstream.ok) {
-        // Do not expose provider error bodies or credentials.
-        return reply(
-          { ok: false, error: "Gemini request failed", upstream_status: upstream.status },
-          upstream.status === 429 ? 429 : 502
-        );
-      }
-      const data = await upstream.json();
-      timing.gemini_body_ms = Date.now() - geminiHeadersAt;
-      timing.gemini_ms = Date.now() - geminiStarted;
-      if (speech) {
-        const response = speechResponse(data);
-        response.headers.set("Server-Timing",
-          `gemini_headers;dur=${timing.gemini_headers_ms}, gemini_body;dur=${timing.gemini_body_ms}, worker_total;dur=${Date.now() - started}`);
-        return response;
-      }
-      const text = (data.candidates?.[0]?.content?.parts ?? [])
-        .filter(part => typeof part.text === "string" && !part.thought)
-        .map(part => part.text).join("").trim();
-      if (!text) return reply({ ok: false, error: "Gemini returned no text" }, 502);
-      if (ask && (data.candidates?.[0]?.finishReason !== "STOP" || text.length > 1000)) {
-        return reply({ ok: false, error: "Gemini reply was incomplete or too long" }, 502);
-      }
-      // Existing firmware skips TTS for an empty answer; never speak the marker.
-      if (ask && text === "[IGNORE]") {
-        return reply({ ok: true, model: MODEL, text: "", ignored: true });
-      }
-      return reply({ ok: true, model: MODEL, text });
-    } catch {
-      timing.gemini_ms = Date.now() - geminiStarted;
-      return reply(
-        { ok: false, error: controller.signal.aborted ? "Gemini timed out" : "Gemini connection or response failed" },
-        controller.signal.aborted ? 504 : 502
-      );
-    } finally {
-      clearTimeout(timeout);
+    const gemini = await callGoogle(GEMINI_URL, env.GEMINI_API_KEY, body, "Gemini", ask ? 45000 : 20000);
+    timing.gemini_headers_ms = gemini.headers_ms;
+    timing.gemini_body_ms = gemini.body_ms;
+    timing.gemini_ms = gemini.total_ms;
+    if (gemini.failure) return reply(gemini.failure, gemini.status);
+    const data = gemini.data;
+    const text = (data?.candidates?.[0]?.content?.parts ?? [])
+      .filter(part => typeof part.text === "string" && !part.thought)
+      .map(part => part.text).join("").trim();
+    if (!text) return reply({ ok: false, error: "Gemini returned no text" }, 502);
+    if (ask && (data?.candidates?.[0]?.finishReason !== "STOP" || text.length > 1000)) {
+      return reply({ ok: false, error: "Gemini reply was incomplete or too long" }, 502);
     }
+    if (intent) {
+      const selected = intentReply(text);
+      if (!selected) return reply({ ok: false, error: "Gemini returned an unknown topic" }, 502);
+      return reply({ ok: true, model: MODEL, ...selected });
+    }
+    if (ask && text === "[IGNORE]") {
+      return reply({ ok: true, model: MODEL, text: "", ignored: true });
+    }
+    return reply({ ok: true, model: MODEL, text });
   },
 };
