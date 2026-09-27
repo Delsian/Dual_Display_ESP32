@@ -2,6 +2,24 @@
 # Agent Instructions
 
 Keep responses and context concise. Work only on the requested behavior.
+Write project documentation and instructions in English.
+
+## Context boundaries
+
+- Start firmware tasks in a separate session rooted in this directory.
+  An open editor tab does not define the session directory.
+- Do not routinely load Android context, source, or conversation history.
+  Read [Doc/BLE.md](Doc/BLE.md) for device communication, protocol, or
+  compatibility tasks; it is the authoritative shared BLE contract.
+- Read Android documentation or nearby source only when a specific integration
+  question cannot be answered from the contract and local firmware source.
+  Android owns its architecture and validation summaries in its own project.
+- Keep packet definitions in the shared BLE contract rather than duplicating
+  them in project summaries. Modify Android only when the task authorizes it.
+- For cross-project work, provide a short handoff: contract changes, required
+  counterpart changes, validation performed, and pending checks.
+- Use ordinary documentation for context. Add a skill only for a concrete,
+  repeatable workflow that needs reusable instructions.
 
 ## Shared project context
 

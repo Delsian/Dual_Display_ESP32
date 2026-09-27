@@ -3,6 +3,9 @@
         {
             "path": ".",
             "name": "Parrot"
+        },
+        {
+            "path": "../android"
         }
     ],
     "extensions": {

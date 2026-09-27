@@ -1,6 +1,7 @@
-# BLE configuration with nRF Connect
+# BLE configuration, battery and voice link
 
-Flash the firmware normally; a filesystem upload is not needed for BLE support.
+Flash the firmware normally; a filesystem upload is not needed for BLE services.
+Voice replies require the corresponding WAV clips in LittleFS (`/clips/`).
 The device advertises as `Parrot-XXXXXX`. Install **nRF Connect for Mobile**,
 scan, and connect from inside the app.
 
@@ -11,7 +12,7 @@ visible on the right. This implementation does not request bonding; reconnecting
 can require pairing again. If a phone retains an obsolete bond, forget it and
 pair again. BLE and Wi-Fi use the same device name but are separate connections.
 
-## Service and characteristics
+## Configuration service and characteristics
 
 Service UUID: `6b520001-7c8e-4c30-9aa8-45e626d39b01`
 
@@ -35,6 +36,93 @@ In nRF Connect, read Battery Level or enable its notifications.
 This uses the existing ADC voltage-based estimate, not an ETA6098 register or
 fuel gauge. It does not report charging status, and the estimate can be affected
 by charging and load.
+
+## Voice service (Android relay)
+
+Updated 2026-09-25: firmware integration is implemented and build-tested; codec
+host tests pass with sanitizers. The Android app is pending, and the protocol
+has not been validated on a phone. This describes current source behavior,
+not a finalized or hardware-verified transport.
+
+Service UUID: `6b520010-7c8e-4c30-9aa8-45e626d39b01`
+
+The characteristics share the suffix `-7c8e-4c30-9aa8-45e626d39b01`:
+
+| UUID prefix | Purpose | Operation |
+| --- | --- | --- |
+| `6b520011` | TX: ESP32 → phone recording | Notify, binary packets |
+| `6b520012` | RX: phone → ESP32 reply | Write with response, UTF-8 text |
+
+Voice, configuration and battery use one GATT server. The voice service is
+created before advertising but its UUID is not included in advertising data;
+connect using the device name or configuration service, then discover services.
+With `USE_AUDIO=0`, the voice service is absent.
+
+Enabling TX notifications through its CCCD (`0x2902`) and writing RX require
+an encrypted, authenticated link. Pair using the displayed passkey. Subscribe
+again after every reconnect; firmware clears the subscription on disconnect.
+Negotiate MTU 185 before recording: full audio notifications contain 165 bytes,
+requiring MTU at least 168. Firmware currently does not check the negotiated
+MTU or shrink packets for a smaller one.
+
+### TX packet format
+
+Each notification contains one packet. All multibyte integers are little-endian;
+there is no WAV header in the BLE stream.
+
+| Type | Layout (byte offsets) | Meaning |
+| --- | --- | --- |
+| `0x01` start | `0`: type; `1–2`: sample rate, unsigned 16-bit | New mono recording, currently 16000 Hz |
+| `0x02` audio | `0`: type; `1`: sequence; `2–3`: signed 16-bit predictor; `4`: step index; `5…`: ADPCM nibbles | Up to 320 samples (20 ms), normally 165 bytes total |
+| `0x03` end | `0`: type; `1–4`: total sample count, unsigned 32-bit | Capture completed; phone may submit the recording |
+| `0x04` cancel | `0`: type only | Discard recording and cancel any associated upload |
+
+Audio selects `AUDIO_AI_MIC_CHANNEL` from the 16 kHz stereo capture. Sequence
+starts at zero per recording and increments modulo 256. Each packet carries
+the decoder state **before** its first sample; the predictor header is not an
+extra output sample. Reset the decoder to that packet's predictor/index, then
+decode low nibble first. Valid step indices are 0–88. Mirror
+[`speech_adpcm_decode`](../src/speech_clip.cpp), including its exact
+`((2 * magnitude + 1) * step) >> 3` update and saturation.
+
+The last audio packet may be shorter. An odd sample count leaves an unused
+high nibble in its last byte; use the end packet's total count to trim that
+padding. These packets are not standard IMA ADPCM WAV blocks. A later packet's
+state permits decoding after a missing packet, but does not recover lost audio.
+
+### Relay and reply flow
+
+The planned native Android 12+ app buffers and decodes notifications to mono
+16-bit PCM. After end, it wraps the recording as PCM WAV and posts to the
+existing Worker `/intent` endpoint using the device token. The app then writes
+one complete UTF-8 message to RX, without a newline or NUL terminator:
+
+| RX message | Firmware behavior |
+| --- | --- |
+| `clip:001` or `clip:off_1` | Decode and play `/clips/001.wav` or `/clips/off_1.wav` |
+| `ignore` | Finish without playback |
+| `error:<text>` | Log the reply and finish without playback |
+
+Map the Worker's nonempty `clip` field to `clip:<name>` and its ignored result
+to `ignore`. Clip names exclude the extension and accept 1–16 lowercase letters,
+digits or underscores. RX retains at most 63 bytes; longer writes are truncated.
+Other replies also finish without playback. Send one reply only after end.
+
+Firmware accepts one recording/request at a time and waits up to 30 seconds
+after end for a reply. Recordings shorter than 4000 samples (0.25 seconds)
+produce cancel instead of end when still connected. Disconnect stops streaming
+and ends reply waiting within the 100 ms polling interval; the recording buffer
+stays reserved until capture finalizes. Reconnection cannot resume that job.
+
+### Pending protocol validation
+
+- Verify negotiated MTU, notification delivery and sustained audio throughput.
+  There is no application acknowledgment, retransmission or flow control.
+- Define phone handling for missing packets and sample-count mismatches.
+- Replies have no request ID. Timeout currently sends no cancel packet, so the
+  relay must suppress late responses; robust request correlation remains pending.
+- nRF Connect can inspect the service and send a manual reply after end, but
+  does not implement the Android audio decoder/Worker relay.
 
 ## Change a setting
 
@@ -101,3 +189,10 @@ to replace the device's saved settings with your local `data/` files.
 - Disconnect mid-upload and reconnect; confirm partial input was discarded.
 - Test BLE editing while the Wi-Fi portal is active and while recording/replaying
   audio. Build success does not verify runtime heap or radio coexistence.
+- Discover the voice service, pair, negotiate MTU 185 and subscribe to TX.
+  Capture a phrase; verify start, sequential audio packets and end sample count.
+- After end, write `ignore`, then test another recording with `clip:<name>` for
+  an installed clip. Verify playback and subsequent recording.
+- Release KEY1 before 0.25 seconds; verify cancel instead of end.
+- Disconnect during capture and while awaiting a reply; reconnect, pair if
+  required and resubscribe. Verify the old job is not resumed and a new one works.

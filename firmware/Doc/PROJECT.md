@@ -18,8 +18,8 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
   16 kHz stereo capture, PSRAM recording buffer, KEY1 and automatic activation.
 - [Sound detector](../src/audio_vad.cpp): adaptive energy threshold on the
   selected microphone channel; not a wake-word or semantic speech detector.
-- [Network task](../src/speech_test.cpp): authenticated HTTPS to the Worker,
-  one request at a time, persistent connection reuse, serial replies/timings.
+- [Voice task](../src/speech_test.cpp): BLE recordings to a native Android relay
+  in the sibling Android project, one request at a time; phone returns a clip choice.
 - [Cloudflare Worker](../backend/worker.mjs): Gemini only, behind a device token;
   `/health`, `/test-ai`, `/ask`, `/intent`. No TTS. Deployment is manual
   through Cloudflare. Service: `https://parrot.eug-krashtan.workers.dev`.
@@ -33,7 +33,7 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
 
 ## Decisions and constraints
 
-- Target: voice reply 1–2 s after speech ends. Firmware posts recordings
+- Target: voice reply 1–2 s after speech ends. Android forwards recordings
   to `/intent`; Gemini may only output a topic number, `offtopic` or `ignore`
   (enum schema). The device plays `clips/NNN.wav`, a random `off_K.wav`, or nothing.
   No generation or TTS. Clips are 24 kHz mono IMA ADPCM (ffmpeg's
@@ -47,21 +47,28 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
   serial `speech [N|off_K]` plays a local clip (random if omitted), no network needed.
 - Keep Wi-Fi modem sleep enabled when BLE is active: disabling it caused a
   Wi-Fi driver abort on hardware. Retain HTTPS certificate validation.
-- Reuse HTTPS connections to avoid repeated handshake delay; do not automatically
-  retry POSTs that could already have been processed by the provider.
-  Idle connections receive health requests every 25 seconds, stopping three
-  minutes after the last user network job completes; pings do not extend this limit.
-- Capture ends at five seconds or silence. Upload starts with recording: raw
-  little-endian `audio/L16` in HTTP chunks, wrapped as WAV by the Worker.
-  Closing the socket before the final chunk cancels without a Gemini call.
-  Requests are independent, without conversation history.
-- Provider credentials stay in Worker secrets. Local `.dev.vars` and
-  `include/speech_secrets.h` contain secrets and must not be copied into context,
-  logs, or commits. Firmware uses the device token, not the Gemini API key.
+- BLE-only voice transport, with no Wi-Fi fallback. Native Android 12+ relay
+  source is in `../android`; Android build and device validation are tracked there.
+  Existing Wi-Fi setup remains until a separate removal step.
+- Capture ends at five seconds or silence. BLE streams packetized IMA ADPCM
+  while recording; the Android relay decodes to PCM and calls the unchanged Worker.
+  Requests are independent, without conversation history. Protocol finalization
+  and phone validation remain pending; see [handoff](../proposed_changes.md).
+- Provider credentials stay in Worker secrets. The Android relay accepts the
+  device token. Local `.dev.vars` and `include/speech_secrets.h` contain secrets
+  and must not be copied into context, logs, or commits.
 - Model identifiers live in the Worker. Their presence in source does not prove
   current availability, free quota, or lowest pricing; verify before changing.
 - Firmware builds, filesystem uploads, and Worker deployments are separate.
   Follow the relevant test instructions; do not assume local edits are deployed.
+
+## Integration boundaries
+
+[BLE.md](BLE.md) is the authoritative shared BLE contract. Firmware owns capture
+and clip playback; Android owns its UI, permissions, BLE client, decoding, and
+HTTP client. Read Android context only for specific integration questions;
+do not duplicate its implementation status here. For cross-project changes,
+hand off contract impact, required counterpart changes, and validation evidence.
 
 ## Validation
 
