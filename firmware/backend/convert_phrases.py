@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Convert externally produced phrases to device clips and refresh the Worker.
+"""Convert externally produced phrases to device clips and refresh Android topics.
 
     python3 backend/convert_phrases.py [phrases] [data/clips] [--no-normalize]
-        [--no-trim] [--max-pause=SECONDS]
+        [--no-trim] [--max-pause=SECONDS] [--topics-only]
 
 Input names map to backend/topics.json: idN.* -> NNN.wav (topic N) and
 fbN.* -> off_N.wav (fallback N). Any format ffmpeg reads is accepted. Output is
-24 kHz mono IMA ADPCM WAV, at most ten seconds, loudness-normalized so replies
+16 kHz mono IMA ADPCM WAV, at most ten seconds, loudness-normalized so replies
 play at similar volume. Leading and trailing silence below -45 dB is trimmed;
 --max-pause also shortens longer pauses inside a phrase. Requires ffmpeg on PATH.
 
-It also rewrites the generated topic block in backend/worker.mjs from
+It also writes ../android/app/src/main/assets/intent_topics.json from
 backend/topics.json (topic descriptions and fallback count; answers stay local).
-Deploy the Worker afterwards if that block changed.
+Rebuild the Android app afterwards. --topics-only skips audio conversion.
 """
 import json
 import re
@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FS_BYTES = 0x360000  # LittleFS partition in default_16MB.csv.
 MAX_SECONDS = 10     # Firmware playback buffer limit.
-SAMPLE_RATE = 24000
+SAMPLE_RATE = 16000
 SILENCE = "-45dB"
 EDGE = "start_periods=1:start_threshold=" + SILENCE + ":start_silence={keep}"
 NAME = re.compile(r"^(id|fb)(\d+)$", re.IGNORECASE)
@@ -57,27 +57,26 @@ def clip_seconds(path):
     return min(capacity, declared or capacity) / SAMPLE_RATE
 
 
-def update_worker(catalog):
+def update_android_topics(catalog):
     topics = catalog["topics"]
     ids = [t["id"] for t in topics]
-    if len(set(ids)) != len(ids) or not all(isinstance(i, int) and 1 <= i <= 999 for i in ids):
+    if len(set(ids)) != len(ids) or not all(type(i) is int and 1 <= i <= 999 for i in ids):
         raise ValueError("topics.json: ids must be unique integers 1-999")
-    rows = "".join(f"  {json.dumps([t['id'], t['topic']], ensure_ascii=False)},\n" for t in topics)
-    block = (f"// BEGIN GENERATED TOPICS: edit backend/topics.json, then run backend/convert_phrases.py.\n"
-             f"const TOPICS = [\n{rows}];\nconst FALLBACK_CLIPS = {len(catalog['fallbacks'])};\n"
-             "// END GENERATED TOPICS")
-    path = ROOT / "backend" / "worker.mjs"
-    source = path.read_text(encoding="utf-8")
-    marker = re.compile(r"// BEGIN GENERATED TOPICS[\s\S]*?// END GENERATED TOPICS")
-    if not marker.search(source):
-        raise ValueError("worker.mjs: generated topic markers missing")
-    updated = marker.sub(lambda _: block, source)
-    if updated != source:
+    data = {"topics": [{"id": t["id"], "topic": t["topic"]} for t in topics],
+            "fallbackCount": len(catalog["fallbacks"])}
+    path = ROOT.parent / "android" / "app" / "src" / "main" / "assets" / "intent_topics.json"
+    updated = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists() or path.read_text(encoding="utf-8") != updated:
         path.write_text(updated, encoding="utf-8")
-        print("Updated backend/worker.mjs topics; redeploy the Worker.")
+        print("Updated Android intent_topics.json; rebuild the Android app.")
 
 
 def main():
+    catalog = json.loads((ROOT / "backend" / "topics.json").read_text(encoding="utf-8"))
+    if "--topics-only" in sys.argv:
+        update_android_topics(catalog)
+        return 0
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     normalize = "--no-normalize" not in sys.argv
     trim = "--no-trim" not in sys.argv
@@ -129,7 +128,7 @@ def main():
               f"  {seconds:.1f} s, {target.stat().st_size / 1024:.0f} KB")
 
     catalog = json.loads((ROOT / "backend" / "topics.json").read_text(encoding="utf-8"))
-    update_worker(catalog)
+    update_android_topics(catalog)
     expected = [f"{t['id']:03d}" for t in catalog["topics"]]
     expected += [f"off_{i + 1}" for i in range(len(catalog["fallbacks"]))]
     missing = [n for n in expected if not (output / f"{n}.wav").exists()]

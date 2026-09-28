@@ -14,11 +14,6 @@
 
 #define PROJECT_NAME "Parrot"
 
-// --- Wi-Fi provisioning ---
-#define WIFI_PORTAL_TIMEOUT_SECONDS 180
-#define WIFI_CONNECT_TIMEOUT_SECONDS 20
-#define WIFI_RETRY_INTERVAL_MS 30000UL
-
 // --- Hardware & Pinout Configuration ---
 #define PIN_CS1 TFT_CS_L // Chip-select for screen 1
 #define PIN_CS2 TFT_CS_R // Chip-select for screen 2

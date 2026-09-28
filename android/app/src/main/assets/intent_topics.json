@@ -1,0 +1,205 @@
+{
+  "topics": [
+    {
+      "id": 1,
+      "topic": "Weather, appearance, color, what can be seen, visible things"
+    },
+    {
+      "id": 2,
+      "topic": "Rain, sea, water, swimming, being wet"
+    },
+    {
+      "id": 3,
+      "topic": "Heat, cold, temperature, hot or cold weather"
+    },
+    {
+      "id": 4,
+      "topic": "Wind, storm, hurricane, bad weather, strong wind"
+    },
+    {
+      "id": 5,
+      "topic": "Time, current time, what time it is, hours and minutes"
+    },
+    {
+      "id": 6,
+      "topic": "Date, day, calendar, today, tomorrow, yesterday"
+    },
+    {
+      "id": 7,
+      "topic": "Location, where we are, where something is, direction"
+    },
+    {
+      "id": 8,
+      "topic": "Distance, how far, how close, nearby places"
+    },
+    {
+      "id": 9,
+      "topic": "Navigation, route, directions, where to go, how to get somewhere"
+    },
+    {
+      "id": 10,
+      "topic": "Maps, coordinates, compass, orientation, finding direction"
+    },
+    {
+      "id": 11,
+      "topic": "Sea, ocean, waves, large bodies of water"
+    },
+    {
+      "id": 12,
+      "topic": "Ships, boats, vessels, sailing ships, ship construction"
+    },
+    {
+      "id": 13,
+      "topic": "Pirates, piracy, corsairs, buccaneers, pirate life"
+    },
+    {
+      "id": 14,
+      "topic": "Captain, leadership, commanding a ship, giving orders"
+    },
+    {
+      "id": 15,
+      "topic": "Long John Silver, John Silver, Silver, the parrot's owner"
+    },
+    {
+      "id": 16,
+      "topic": "Captain Flint, the parrot's name, who the parrot is, questions about the parrot itself"
+    },
+    {
+      "id": 17,
+      "topic": "Parrot age, birthday, how old Captain Flint is"
+    },
+    {
+      "id": 18,
+      "topic": "Parrot appearance, looks, feathers, color, beauty, what Captain Flint looks like"
+    },
+    {
+      "id": 19,
+      "topic": "Birds, parrots, flying, feathers, other bird species"
+    },
+    {
+      "id": 20,
+      "topic": "Animals, wild animals, pets, animal behavior"
+    },
+    {
+      "id": 21,
+      "topic": "Fish, marine animals, sea creatures, creatures living underwater"
+    },
+    {
+      "id": 22,
+      "topic": "Sharks, dangerous animals, predators, dangerous sea creatures"
+    },
+    {
+      "id": 23,
+      "topic": "Food, eating, meals, what to eat, hunger"
+    },
+    {
+      "id": 24,
+      "topic": "Taste, whether food is tasty, good or bad food, favorite food"
+    },
+    {
+      "id": 25,
+      "topic": "Rum, alcohol, beer, wine, drinking, alcoholic beverages"
+    },
+    {
+      "id": 26,
+      "topic": "Water, drinks, thirst, what to drink, non-alcoholic beverages"
+    },
+    {
+      "id": 27,
+      "topic": "Money, price, cost, gold, coins, wealth, treasure value"
+    },
+    {
+      "id": 28,
+      "topic": "Treasure, gold treasure, treasure hunting, hidden riches"
+    },
+    {
+      "id": 29,
+      "topic": "Where treasure is hidden, treasure maps, clues, finding treasure"
+    },
+    {
+      "id": 30,
+      "topic": "Weapons, sword, saber, pistol, musket, cannon, how weapons work"
+    },
+    {
+      "id": 31,
+      "topic": "Fight, combat, fighting, who is stronger, physical confrontation"
+    },
+    {
+      "id": 32,
+      "topic": "Danger, safety, risk, whether something is safe or dangerous"
+    },
+    {
+      "id": 33,
+      "topic": "Advice, what should I do, recommendations, asking what action to take"
+    },
+    {
+      "id": 34,
+      "topic": "Can something be done, possibility, permission, whether something is possible"
+    },
+    {
+      "id": 35,
+      "topic": "How to do something, instructions, procedure, practical tasks"
+    },
+    {
+      "id": 36,
+      "topic": "Why something happened, causes, reasons, explanation of an event"
+    },
+    {
+      "id": 37,
+      "topic": "Who is responsible, whose fault it is, blame, responsibility"
+    },
+    {
+      "id": 38,
+      "topic": "Yes or no questions, confirmation, whether something is true"
+    },
+    {
+      "id": 39,
+      "topic": "Choosing between two or more options, which one to buy, which is better"
+    },
+    {
+      "id": 40,
+      "topic": "Mathematics, numbers, counting, calculations, arithmetic"
+    },
+    {
+      "id": 41,
+      "topic": "Science, physics, chemistry, biology, scientific explanations"
+    },
+    {
+      "id": 42,
+      "topic": "Technology, machines, mechanisms, engines, devices, repairing things"
+    },
+    {
+      "id": 43,
+      "topic": "Computers, programming, software, operating systems, computer problems"
+    },
+    {
+      "id": 44,
+      "topic": "Phones, internet, social networks, modern communications, modern technology"
+    },
+    {
+      "id": 45,
+      "topic": "Medicine, health, injuries, pain, illness, feeling sick"
+    },
+    {
+      "id": 46,
+      "topic": "Clothes, clothing, what to wear, fashion, shoes"
+    },
+    {
+      "id": 47,
+      "topic": "Love, romance, relationships, dating, marriage"
+    },
+    {
+      "id": 48,
+      "topic": "Intelligence, stupidity, difficult questions, complicated explanations"
+    },
+    {
+      "id": 49,
+      "topic": "Books, history, literature, knowledge, education, learning"
+    },
+    {
+      "id": 50,
+      "topic": "Greetings, hello, how are you, small talk, casual conversation"
+    }
+  ],
+  "fallbackCount": 10
+}

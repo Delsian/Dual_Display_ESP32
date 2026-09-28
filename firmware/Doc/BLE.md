@@ -7,10 +7,10 @@ scan, and connect from inside the app.
 
 Configuration reads and writes require encrypted, authenticated BLE pairing.
 When prompted, enter the six-digit code displayed on the left TFT (also printed
-on serial). Pairing temporarily replaces the left eye; Wi-Fi setup can remain
-visible on the right. This implementation does not request bonding; reconnecting
+on serial). Pairing temporarily replaces the left eye. This implementation does
+not request bonding; reconnecting
 can require pairing again. If a phone retains an obsolete bond, forget it and
-pair again. BLE and Wi-Fi use the same device name but are separate connections.
+pair again.
 
 ## Configuration service and characteristics
 
@@ -40,7 +40,7 @@ by charging and load.
 ## Voice service (Android relay)
 
 Updated 2026-09-25: firmware integration is implemented and build-tested; codec
-host tests pass with sanitizers. The Android app is pending, and the protocol
+host tests pass with sanitizers. The Android app is implemented (see its status), and the protocol
 has not been validated on a phone. This describes current source behavior,
 not a finalized or hardware-verified transport.
 
@@ -51,7 +51,7 @@ The characteristics share the suffix `-7c8e-4c30-9aa8-45e626d39b01`:
 | UUID prefix | Purpose | Operation |
 | --- | --- | --- |
 | `6b520011` | TX: ESP32 → phone recording | Notify, binary packets |
-| `6b520012` | RX: phone → ESP32 reply | Write with response, UTF-8 text |
+| `6b520012` | RX: phone → ESP32 reply or manual play | Write with response, UTF-8 text |
 
 Voice, configuration and battery use one GATT server. The voice service is
 created before advertising but its UUID is not included in advertising data;
@@ -92,9 +92,9 @@ state permits decoding after a missing packet, but does not recover lost audio.
 
 ### Relay and reply flow
 
-The planned native Android 12+ app buffers and decodes notifications to mono
-16-bit PCM. After end, it wraps the recording as PCM WAV and posts to the
-existing Worker `/intent` endpoint using the device token. The app then writes
+The native Android 12+ app buffers and decodes notifications to mono
+16-bit PCM. After end, it wraps the recording as PCM WAV and calls Gemini
+directly using a user-entered API key (updated 2026-09-28). The app then writes
 one complete UTF-8 message to RX, without a newline or NUL terminator:
 
 | RX message | Firmware behavior |
@@ -103,8 +103,8 @@ one complete UTF-8 message to RX, without a newline or NUL terminator:
 | `ignore` | Finish without playback |
 | `error:<text>` | Log the reply and finish without playback |
 
-Map the Worker's nonempty `clip` field to `clip:<name>` and its ignored result
-to `ignore`. Clip names exclude the extension and accept 1–16 lowercase letters,
+Android maps a valid topic number to `clip:NNN`, `offtopic` to a random
+`clip:off_K`, and `ignore` to `ignore`; failed or invalid results become errors. Clip names exclude the extension and accept 1–16 lowercase letters,
 digits or underscores. RX retains at most 63 bytes; longer writes are truncated.
 Other replies also finish without playback. Send one reply only after end.
 
@@ -114,15 +114,37 @@ produce cancel instead of end when still connected. Disconnect stops streaming
 and ends reply waiting within the 100 ms polling interval; the recording buffer
 stays reserved until capture finalizes. Reconnection cannot resume that job.
 
+### Manual clip playback (2026-09-28)
+
+After pairing and subscribing, write `play:<name>` to voice RX to play a clip
+without recording or calling Gemini. Names are 1–16 lowercase ASCII letters,
+digits or underscores, with no extension or path; `play:001` loads `/clips/001.wav`.
+Android normalizes numeric input `1` to `001`; `off_1` is sent unchanged.
+This command requires the updated firmware; existing reply messages are unchanged.
+
+The BLE callback validates the full name (including rejecting embedded NUL),
+reserves the shared busy flag, and queues decoding to the voice task. Pending
+recording/reply/clip requests reject manual commands; they never enter the reply
+queue. A queued command is dropped if its connection changes before processing.
+An already playing clip can have one subsequent clip pending, using the existing
+playback handoff. Playback already handed to the audio task survives disconnect.
+
+The GATT write acknowledgment confirms delivery, not successful playback. Busy,
+missing-file and decoding failures are reported on firmware serial; no new
+playback-status notification or clip-list endpoint is provided.
+
 ### Pending protocol validation
 
+- Verify manual play while idle, during playback and a recording/request, missing
+  clips, invalid names, rapid presses and disconnect/reconnect.
 - Verify negotiated MTU, notification delivery and sustained audio throughput.
   There is no application acknowledgment, retransmission or flow control.
 - Define phone handling for missing packets and sample-count mismatches.
 - Replies have no request ID. Timeout currently sends no cancel packet, so the
-  relay must suppress late responses; robust request correlation remains pending.
+  relay suppresses stale responses with a 25-second deadline and local generation
+  checks; robust on-wire request correlation remains pending.
 - nRF Connect can inspect the service and send a manual reply after end, but
-  does not implement the Android audio decoder/Worker relay.
+  does not implement the Android audio decoder/Gemini client.
 
 ## Change a setting
 
@@ -140,14 +162,9 @@ accumulate changes, even before reboot. Unknown top-level keys, invalid values,
 unsupported versions, and malformed JSON are rejected without modifying the
 saved configuration. On errors, write `clear` and resend the corrected patch.
 
-To change Wi-Fi networks, send a patch such as:
-
-```json
-{"wifi_networks":[{"ssid":"Home","password":"replace-this-password"}]}
-```
-
-The supplied array replaces the whole list; `{"wifi_networks":[]}` clears it.
-Portal credentials in NVS are separate and are not changed by these commands.
+Configuration supports only `version` and `audio_volume`. Wi-Fi fields were
+removed on 2026-09-27; clients must omit them from patches. Voice packets and
+service UUIDs are unchanged.
 
 For longer JSON, write consecutive chunks to the buffer, then send `save` once.
 Use at most 20 bytes per write at the default MTU, or negotiate a larger MTU in
@@ -166,10 +183,10 @@ Disconnecting discards unfinished input; it does not undo a successful save.
 
 Pages are byte slices; join their bytes before decoding the entire JSON if a
 UTF-8 character crosses a page boundary. Reads show the last configuration
-saved during this boot, initially the validated boot configuration. They include
-JSON Wi-Fi passwords and therefore require authenticated pairing.
+saved during this boot, initially the validated boot configuration. Reads require
+authenticated pairing.
 
-Saving does not change currently running audio or network tasks, or restart the
+Saving does not change currently running audio tasks, or restart the
 device automatically. Do not upload the filesystem afterwards unless you intend
 to replace the device's saved settings with your local `data/` files.
 
@@ -185,10 +202,10 @@ to replace the device's saved settings with your local `data/` files.
 - Send multiple consecutive patches and verify omitted fields remain unchanged.
 - Send malformed JSON, an invalid volume, and an oversized buffer; verify the
   saved file is unchanged and `clear` allows recovery.
-- Split a Wi-Fi list across multiple writes and save; verify it after reboot.
+- Split a volume patch across multiple writes and save; verify it after reboot.
 - Disconnect mid-upload and reconnect; confirm partial input was discarded.
-- Test BLE editing while the Wi-Fi portal is active and while recording/replaying
-  audio. Build success does not verify runtime heap or radio coexistence.
+- Test BLE editing while recording/replaying audio. Build success does not
+  verify runtime heap or radio behavior.
 - Discover the voice service, pair, negotiate MTU 185 and subscribe to TX.
   Capture a phrase; verify start, sequential audio packets and end sample count.
 - After end, write `ignore`, then test another recording with `clip:<name>` for

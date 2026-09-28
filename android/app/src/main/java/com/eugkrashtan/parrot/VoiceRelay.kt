@@ -14,14 +14,13 @@ import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Handler
+import android.os.SystemClock
 import android.os.Looper
-import org.json.JSONObject
 import java.io.ByteArrayOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 class VoiceRelay(private val context: Context, private val listener: Listener) {
@@ -30,7 +29,10 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
         fun onStatus(message: String)
     }
 
-    data class Config(val endpoint: String, val token: String)
+    data class Config(val apiKey: String)
+
+    private val generation = AtomicLong()
+    private val classifier = GeminiIntent(context.assets.open("intent_topics.json").bufferedReader().use { it.readText() })
 
     private val adapter = BluetoothAdapter.getDefaultAdapter()
     private val scanner get() = adapter?.bluetoothLeScanner
@@ -41,6 +43,10 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
     private var pcm = ByteArrayOutputStream()
     private var expectedSamples = 0
     private var sampleRate = 16000
+    private var subscribed = false
+    private var voiceBusy = false
+    private var writePending = false
+    private var pendingPlay: String? = null
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(type: Int, result: ScanResult) {
@@ -63,8 +69,12 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
                 listener.onStatus("Connected; discovering services")
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                listener.onStatus("Disconnected")
-                close()
+                main.post {
+                    if (this@VoiceRelay.gatt === gatt) {
+                        listener.onStatus("Disconnected")
+                        close()
+                    }
+                }
             }
         }
 
@@ -107,12 +117,28 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            listener.onStatus(if (status == BluetoothGatt.GATT_SUCCESS) "Ready" else "Subscription failed")
+            main.post {
+                if (this@VoiceRelay.gatt !== gatt) return@post
+                subscribed = status == BluetoothGatt.GATT_SUCCESS
+                listener.onStatus(if (subscribed) "Ready" else "Subscription failed")
+            }
+        }
+
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            main.post {
+                if (this@VoiceRelay.gatt !== gatt || characteristic.uuid != VOICE_RX) return@post
+                writePending = false
+                val clip = pendingPlay
+                pendingPlay = null
+                if (status != BluetoothGatt.GATT_SUCCESS) listener.onStatus("BLE write failed: $status")
+                else if (clip != null) listener.onStatus("Play request sent: $clip")
+            }
         }
 
         @Suppress("DEPRECATION")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            handlePacket(characteristic.value)
+            val packet = characteristic.value.copyOf()
+            main.post { if (this@VoiceRelay.gatt === gatt) handlePacket(packet) }
         }
 
         override fun onCharacteristicChanged(
@@ -120,7 +146,8 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
-            handlePacket(value)
+            val packet = value.copyOf()
+            main.post { if (this@VoiceRelay.gatt === gatt) handlePacket(packet) }
         }
     }
 
@@ -152,6 +179,11 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
 
     @SuppressLint("MissingPermission")
     fun close() {
+        generation.incrementAndGet()
+        subscribed = false
+        voiceBusy = false
+        writePending = false
+        pendingPlay = null
         stopScan()
         gatt?.close()
         gatt = null
@@ -164,6 +196,8 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
         when (packet[0].toInt() and 0xff) {
             0x01 -> {
                 if (packet.size < 3) return
+                generation.incrementAndGet()
+                voiceBusy = true
                 sampleRate = u16(packet, 1)
                 pcm = ByteArrayOutputStream()
                 listener.onStatus("Recording at ${sampleRate} Hz")
@@ -176,7 +210,9 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
                 uploadRecording()
             }
             0x04 -> {
+                generation.incrementAndGet()
                 pcm.reset()
+                voiceBusy = false
                 listener.onStatus("Recording cancelled")
             }
         }
@@ -188,10 +224,7 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
         var index = packet[4].toInt() and 0xff
         if (index > 88) return
         val bytes = packet.copyOfRange(5, packet.size)
-        for (value in bytes) {
-            decodeNibble(value.toInt() and 0x0f) { sample -> writeSample(sample) }
-            decodeNibble((value.toInt() ushr 4) and 0x0f) { sample -> writeSample(sample) }
-        }
+
         fun decodeNibble(nibble: Int, output: (Int) -> Unit) {
             val step = STEP_TABLE[index]
             var difference = step shr 3
@@ -203,6 +236,11 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
             index = (index + INDEX_TABLE[nibble]).coerceIn(0, 88)
             output(predictor)
         }
+
+        for (value in bytes) {
+            decodeNibble(value.toInt() and 0x0f) { sample -> writeSample(sample) }
+            decodeNibble((value.toInt() ushr 4) and 0x0f) { sample -> writeSample(sample) }
+        }
     }
 
     private fun writeSample(sample: Int) {
@@ -212,48 +250,83 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
 
     private fun uploadRecording() {
         val samples = expectedSamples
-        val bytes = pcm.toByteArray().copyOf(minOf(pcm.size(), samples * 2))
-        thread(name = "parrot-upload") {
-            val response = try {
-                postWav(bytes, sampleRate)
-            } catch (error: Exception) {
-                listener.onStatus("Upload failed: ${error.message ?: "network error"}")
-                "error:upload"
+        val rate = sampleRate
+        val captured = pcm.toByteArray()
+        val job = generation.incrementAndGet()
+        val deadline = SystemClock.elapsedRealtime() + 25_000
+        // Snapshot the configuration on the UI thread; never read EditText from a worker.
+        main.post {
+            if (generation.get() != job) return@post
+            if (rate != 16000 || samples !in 4000..480000 ||
+                captured.size < samples * 2 || captured.size > samples * 2 + 2) {
+                writeReply("error:recording")
+                return@post
             }
-            main.post { writeReply(response) }
+            val config = listener.relayConfig()
+            val timeout = Runnable {
+                if (generation.compareAndSet(job, job + 1)) {
+                    writeReply("error:timeout")
+                }
+            }
+            // Firmware gives us 30 seconds. Leave time for the BLE write.
+            main.postDelayed(timeout, 25_000)
+            thread(name = "parrot-gemini") {
+                val response = try {
+                    classifier.classify(wav(captured.copyOf(samples * 2), rate), config.apiKey)
+                } catch (_: Exception) {
+                    // Never expose provider bodies or exception details containing credentials.
+                    "error:gemini"
+                }
+                main.post {
+                    main.removeCallbacks(timeout)
+                    if (generation.compareAndSet(job, job + 1)) {
+                        writeReply(if (SystemClock.elapsedRealtime() < deadline) response else "error:timeout")
+                    }
+                }
+            }
         }
     }
 
-    private fun postWav(audio: ByteArray, rate: Int): String {
-        val config = listener.relayConfig()
-        require(config.endpoint.startsWith("https://")) { "Worker URL must use HTTPS" }
-        require(config.token.isNotEmpty()) { "Device token is required" }
-        val body = wav(audio, rate)
-        val connection = (URL(config.endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 10_000
-            readTimeout = 20_000
-            doOutput = true
-            setRequestProperty("Authorization", "Bearer ${config.token}")
-            setRequestProperty("Content-Type", "audio/wav")
-            setRequestProperty("Content-Length", body.size.toString())
+    @SuppressLint("MissingPermission")
+    fun playStoredClip(input: String) {
+        val name = ClipSelection.normalize(input)
+        if (name == null) {
+            listener.onStatus("Enter a clip number 1–999 or name such as off_1 (no .wav)")
+            return
         }
-        connection.outputStream.use { it.write(body) }
-        val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
-        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-        if (connection.responseCode !in 200..299) error("HTTP ${connection.responseCode}")
-        val clip = JSONObject(text).optString("clip")
-        return if (clip.isNotEmpty()) "clip:$clip" else "ignore"
+        val connection = gatt
+        val characteristic = rx
+        if (!hasBluetoothPermission() || !subscribed || connection == null || characteristic == null) {
+            listener.onStatus("Connect and wait for Ready before playing a clip")
+            return
+        }
+        if (voiceBusy || writePending) {
+            listener.onStatus("Wait for the current request to finish")
+            return
+        }
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        characteristic.value = "play:$name".toByteArray(Charsets.UTF_8)
+        writePending = true
+        pendingPlay = name
+        if (!connection.writeCharacteristic(characteristic)) {
+            writePending = false
+            pendingPlay = null
+            listener.onStatus("Could not send play request; try again")
+        } else listener.onStatus("Sending play request: $name")
     }
 
     @SuppressLint("MissingPermission")
     private fun writeReply(reply: String) {
+        voiceBusy = false
         val characteristic = rx ?: return
         val connection = gatt ?: return
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        characteristic.value = reply.toByteArray(Charsets.UTF_8).copyOf(63)
-        if (!connection.writeCharacteristic(characteristic)) listener.onStatus("Could not send reply")
-        else listener.onStatus("Reply sent: ${reply.substringBefore(':')}")
+        characteristic.value = reply.toByteArray(Charsets.UTF_8).let { it.copyOf(minOf(it.size, 63)) }
+        writePending = true
+        if (!connection.writeCharacteristic(characteristic)) {
+            writePending = false
+            listener.onStatus("Could not send reply")
+        } else listener.onStatus("Reply sent: ${reply.substringBefore(':')}")
     }
 
     private fun wav(pcm: ByteArray, rate: Int): ByteArray {

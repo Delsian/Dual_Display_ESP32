@@ -30,8 +30,8 @@
   </header>
   <div class="grid">
     <section>
-      <h2>Cloudflare Workers</h2>
-      <p>Hosts the <code>parrot</code> backend and device authentication.</p>
+      <h2>Cloudflare Workers (legacy)</h2>
+      <p>No longer used by the Android app, which calls Gemini directly. The previous deployment has not been modified.</p>
       <ul>
         <li><a href="https://dash.cloudflare.com/">Worker dashboard, deployments &amp; secrets</a>
           <small>Account → Workers &amp; Pages → parrot. Use Settings for secrets and Edit code for deployment.</small></li>
@@ -47,7 +47,7 @@
     </section>
     <section>
       <h2>Gemini / Google AI Studio</h2>
-      <p>Understands recorded speech and generates the text answer for <code>/ask</code>.</p>
+      <p>Classifies recorded speech into a prerecorded clip topic, called directly by Android.</p>
       <ul>
         <li><a href="https://aistudio.google.com/">AI Studio</a></li>
         <li><a href="https://aistudio.google.com/apikey">Gemini API keys &amp; projects</a></li>
@@ -58,13 +58,13 @@
           <small>Select the billing account linked to the Gemini key's project.</small></li>
         <li><a href="https://ai.google.dev/gemini-api/docs/pricing">Gemini API pricing</a></li>
         <li><a href="https://aistudio.google.com/">Request logs, where enabled</a>
-          <small>Check AI Studio's logging controls. Usage metrics are not a transcript of every request; provider payloads are not logged by this Worker.</small></li>
+          <small>Check AI Studio's logging controls. Usage metrics are not a transcript of every request; provider payloads are not logged by the Android app.</small></li>
         <li><a href="https://aistudio.google.com/status">Gemini API service status</a></li>
       </ul>
     </section>
     <section>
       <h2>Google Cloud Text-to-Speech</h2>
-      <p>Standard voices generate audio for <code>/speak</code> and <code>/test-speech</code>.</p>
+      <p>Legacy service; current playback uses prerecorded clips, with no runtime TTS.</p>
       <ul>
         <li><a href="https://console.cloud.google.com/apis/library/texttospeech.googleapis.com">Enable / manage Cloud TTS API</a></li>
         <li><a href="https://console.cloud.google.com/apis/credentials">API keys &amp; restrictions</a></li>

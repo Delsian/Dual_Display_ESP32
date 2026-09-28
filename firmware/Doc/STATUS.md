@@ -1,8 +1,15 @@
 # Current project status
 
-Updated: 2026-09-27. Scope: context boundaries; prior BLE validation retained.
+Updated: 2026-09-28. Scope: 16 kHz clips regenerated and firmware/filesystem uploaded.
 
 ## Implemented and build-tested
+
+- Added validated manual BLE playback, queued to the voice task with busy and
+  connection-generation guards. Existing recording/reply flow is unchanged.
+- Target build and clip host tests passed; Android build and 14 unit tests passed.
+- Wi-Fi removed; serial `speech` commands run in a dedicated task.
+- Config retains version/volume; old fields are ignored at boot and omitted
+  on save. BLE patches reject removed fields; voice protocol is unchanged.
 
 - Recording jobs now pass through the requests queue to the BLE voice task.
 - Voice service initializes on the same GATT server as config and battery,
@@ -12,37 +19,31 @@ Updated: 2026-09-27. Scope: context boundaries; prior BLE validation retained.
   busy until capture finalizes, protecting the shared recording buffer.
 - PlatformIO firmware build passed; existing speech clip/ADPCM tests passed
   with AddressSanitizer and UndefinedBehaviorSanitizer. BLE hardware unverified.
-- 24 kHz mono IMA ADPCM clips: previous firmware/filesystem builds and sanitized
-  decoder tests passed; all 24 regenerated clips matched ffmpeg exactly.
-  Serial `speech [N|off_K]` plays local clips; I2S restores 16 kHz afterward.
+- 16 kHz mono IMA ADPCM: all 60 clips regenerated; sanitized decoder tests
+  passed and every clip matched ffmpeg. Filesystem and firmware builds passed.
+- Firmware + filesystem uploaded to /dev/ttyACM0 with verified flash hashes.
 
 ## Hardware evidence and current limits
-
 - Native Android relay source exists in the sibling project; its build/device
   evidence is tracked in [Android status](../../android/Doc/STATUS.md).
-- Context instructions now limit cross-project reading. This documentation
-  update does not add firmware build or hardware verification evidence.
-- Earlier Wi-Fi `/ask`, TTS playback and HTTPS reuse worked in user logs;
-  these results do not validate the replacement BLE transport. TTS was removed.
 - Voice activation previously confirmed by the user. Defaults: 80 ms onset,
   up to 200 ms pre-roll, 800 ms silence cutoff, five-second maximum,
   one-second cooldown. KEY1 remains available.
 - `AUDIO_AI_REPLY_TEST=1`, `AUDIO_VOICE_ACTIVATION=1`, microphone channel 0.
 - Energy detection can trigger on background sounds; tune `AUDIO_VAD_MIN_RMS`.
-- Worker uses Gemini 3.6 Flash; last reported Worker validation: 5 tests passed.
-- Wi-Fi setup still exists; keep modem sleep enabled until removal, because
-  disabling it previously caused a driver abort with BLE active.
+- Worker retired; Android calls Gemini directly. BLE contract is unchanged.
+- Topic generator syntax/catalog parity passed; live Gemini/hardware checks pending.
 
 ## Pending work
-
 - Current voice protocol documented in [BLE.md](BLE.md) on 2026-09-25;
   finalization and integration validation remain pending. See [handoff](../proposed_changes.md).
-- Remove remaining Wi-Fi setup separately. Worker stays unchanged for the relay.
+- Firmware flashed; install updated app and check manual play, missing clips, busy commands
+  and disconnect/reconnect. No playback result notification is implemented.
 - Phone/ESP32 validation: pairing, subscription, streaming, disconnect during
   capture/reply wait, reconnect/resubscribe, clip replies and actual latency.
-- Upload filesystem + firmware; check pitch/speed, KEY1 interruption,
-  recording after playback, background noise and continued animation.
-- 24 of 60 clips available; data/ uses 2.02 of 3.38 MB. Add missing phrases.
-- Worker redeployment and real-audio language/ignore validation remain pending.
+- All 60 clips fit: data/ uses 3.18 of 3.38 MB; partition layout unchanged.
+  Filesystem upload applied local audio_volume=75; device reset completed.
+- Verify audible playback speed, interruption and recording after playback.
+- Validate real-audio topic/ignore selection through Android; no Worker deployment needed.
 - GitButler session branch unavailable: checkout reports setup required.
   Changes remain uncommitted; no branch setup or history changes performed.

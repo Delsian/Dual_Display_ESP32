@@ -3,6 +3,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+class BLEServer;
+// Register on the shared config/battery server before advertising starts.
+void init_voice_link(BLEServer *server);
+void voice_link_connected();
+void voice_link_disconnected();
+
 // Plays a LittleFS clip locally: "12" -> clips/012.wav, "off_3", or random if empty.
 void request_speech_test(const char *clip);
 // Voice activation must pause while offline, unconfigured, or a request is pending.
@@ -12,7 +18,7 @@ bool audio_reply_available();
 bool begin_audio_reply(const uint8_t *stereo);
 // Publishes captured bytes; final ends the upload, cancelling it under 0.25 s.
 void audio_reply_progress(size_t bytes, bool final);
-// Decoded clip audio handed from the network or serial task to the audio task.
+// Decoded clip audio handed from the BLE voice or serial task to the audio task.
 struct SpeechAudio;
 // Called only by the audio task when idle; release the result when finished.
 SpeechAudio *take_speech_audio();

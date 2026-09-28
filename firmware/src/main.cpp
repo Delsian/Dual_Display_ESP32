@@ -19,7 +19,7 @@
 #include "eye_logic.h"
 #include "tof_sensor.h"
 #include "audio.h"
-#include "wifi_setup.h"
+#include "serial_commands.h"
 #include "device_config.h"
 #include "ble_config.h"
 
@@ -132,7 +132,7 @@ void setup() {
     }
   #endif
 
-  init_wifi();
+  init_serial_commands();
   init_ble_config(get_battery_percentage());
 
   Serial.println("Initialization complete. Starting main loop.");
@@ -187,7 +187,6 @@ void main_loop() {
     clear_buffer(TFT_BLACK);
 
     if (i == EYE_LEFT && draw_ble_pairing()) continue;
-    if (i == EYE_RIGHT && draw_wifi_setup()) continue;
 
     // Get the final calculated position for the current eye
     EyePosition pos = get_eye_position(i);

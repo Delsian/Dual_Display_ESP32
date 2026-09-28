@@ -7,6 +7,7 @@
 #include "ble_config.h"
 #include "device_config.h"
 #include "drawing_tools.h"
+#include "speech_test.h"
 
 namespace {
 constexpr char SERVICE_UUID[] = "6b520001-7c8e-4c30-9aa8-45e626d39b01";
@@ -45,7 +46,9 @@ class SecurityCallbacks : public BLESecurityCallbacks {
 };
 
 class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *) override { voice_link_connected(); }
   void onDisconnect(BLEServer *) override {
+    voice_link_disconnected();
     // Pairing is not bonded; each connection must subscribe again.
     battery_notifications->setNotifications(false);
     battery_notifications->setIndications(false);
@@ -156,6 +159,7 @@ void init_ble_config(int battery_percentage) {
   last_battery_level = static_cast<uint8_t>(constrain(battery_percentage, 0, 100));
   battery_level->setValue(&last_battery_level, 1);
   battery->start();
+  init_voice_link(server);
   auto *advertising = BLEDevice::getAdvertising();
   advertising->addServiceUUID(SERVICE_UUID);
   advertising->addServiceUUID(BLEUUID(uint16_t(0x180F)));

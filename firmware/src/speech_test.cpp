@@ -4,23 +4,13 @@
 
 #if USE_AUDIO
 #include "speech_clip.h"
+#include <BLE2902.h>
+#include <BLEServer.h>
 #include <LittleFS.h>
 #include <esp_heap_caps.h>
 #include <atomic>
 #include <memory>
 #include <new>
-#if __has_include("speech_secrets.h")
-#define SPEECH_NETWORK 1
-#include "speech_secrets.h"
-#include "speech_ca.h"
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
-#include <time.h>
-#else
-#define SPEECH_NETWORK 0 // Local clip playback still works without the token.
-#endif
 
 struct SpeechAudio {
   explicit SpeechAudio(int16_t *data) : pcm(data) {}
@@ -50,7 +40,7 @@ void hand_off(SpeechAudio *audio) {
 
 // Decodes a prerecorded reply from LittleFS and hands it to the audio task.
 bool play_clip(const char *name, uint32_t started) {
-  constexpr size_t MAX_CLIP_BYTES = 128 * 1024; // Ten seconds of 24 kHz ADPCM plus headers.
+  constexpr size_t MAX_CLIP_BYTES = 128 * 1024; // Ample bound for ten seconds of 16 kHz ADPCM plus headers.
   if (!speech_clip_name_valid(name)) { Serial.println("Speech: invalid clip name."); return false; }
   char path[32];
   snprintf(path, sizeof(path), "/clips/%s.wav", name);
@@ -98,101 +88,15 @@ bool random_clip(char *name, size_t size) {
   return count > 0;
 }
 
-#if SPEECH_NETWORK
-constexpr uint32_t KEEP_ALIVE_MS = 25000;
-constexpr uint32_t CONNECTION_IDLE_MS = 180000;
-
-class PersistentHttp : public HTTPClient {
- public:
-  bool establish() { return connect(); }
-  // Chunked uploads write the body directly but reuse the library's framing.
-  bool send_request_header(const char *type) {
-    for (size_t i = 0; i < _headerKeysCount; ++i) _currentHeaders[i].value.clear();
-    return sendHeader(type);
-  }
-  int read_response() { return handleHeaderResponse(); }
-};
-
-// Accessed only by the persistent network task.
-struct HttpSession {
-  WiFiClientSecure tls;
-  PersistentHttp http;
-  uint32_t last_used = 0;
-
-  HttpSession() {
-    tls.setCACert(SPEECH_ROOT_CA);
-    tls.setHandshakeTimeout(15);
-    http.setConnectTimeout(15000);
-    http.setTimeout(50000);
-    http.setUserAgent("Parrot-ESP32/1.0");
-  }
-  void finish(bool complete) {
-    http.setReuse(complete);
-    http.end();
-    if (!complete) tls.stop(); // Never reuse an unread or partial response.
-    last_used = millis();
-  }
-  bool begin(const char *url) {
-    http.setReuse(true);
-    if (!http.begin(tls, url)) { finish(false); return false; }
-    const bool reused = tls.connected();
-    const uint32_t started = millis();
-    const bool connected = http.establish(); // DNS + TCP + validated TLS, no POST yet.
-    Serial.printf("HTTP timing: connection=%lu ms, reused=%s, connected=%s\n",
-                  static_cast<unsigned long>(millis() - started),
-                  reused ? "yes" : "no", connected ? "yes" : "no");
-    if (!connected) finish(false);
-    return connected;
-  }
-};
-
-class WavSink : public Stream {
- public:
-  uint8_t *buffer;
-  size_t capacity;
-  size_t used = 0;
-  uint32_t started = millis();
-  WavSink(uint8_t *data, size_t limit) : buffer(data), capacity(limit) {}
-  size_t write(uint8_t byte) override { return write(&byte, 1); }
-  size_t write(const uint8_t *data, size_t bytes) override {
-    if (bytes > capacity - used || millis() - started > 60000UL) return 0;
-    memcpy(buffer + used, data, bytes);
-    used += bytes;
-    return bytes;
-  }
-  int available() override { return 0; }
-  int read() override { return -1; }
-  int peek() override { return -1; }
-  void flush() override {}
-};
-
-bool network_ready() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Speech: Wi-Fi is not connected.");
-    return false;
-  }
-  if (time(nullptr) < 1700000000) {
-    configTime(0, 0, "pool.ntp.org", "time.google.com");
-    const uint32_t started = millis();
-    while (time(nullptr) < 1700000000 && millis() - started < 10000UL) {
-      vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    if (time(nullptr) < 1700000000) {
-      Serial.println("Speech: clock sync failed; HTTPS requires valid time.");
-      return false;
-    }
-  }
-  return true;
-}
-
-// The recording being captured; the audio task appends, the network task
-// uploads. Only one exists at a time: busy stays set until final is seen.
+// The audio task appends while the voice task transmits. Even on disconnect,
+// busy stays set until final is seen so the recording buffer cannot be reused.
 struct UploadJob {
   const uint8_t *stereo = nullptr;
   std::atomic<size_t> bytes{0};
   std::atomic<bool> final{false};
   uint32_t started = 0; // Recording start.
   uint32_t stopped = 0; // Recording end; written before final.
+  uint32_t generation = 0; // Connection that accepted this recording.
 };
 UploadJob upload;
 bool upload_active = false; // Audio task only.
@@ -201,181 +105,180 @@ void wait_for_recording(UploadJob *job) {
   while (!job->final.load()) vTaskDelay(pdMS_TO_TICKS(10));
 }
 
-// Sends the selected microphone channel as HTTP chunks while recording
-// continues. Returns false if the connection failed.
-bool send_recording(WiFiClientSecure &tls, UploadJob *job, size_t &sent) {
-  constexpr size_t CHUNK_FRAMES = 2048; // 128 ms per chunk.
-  static uint8_t chunk[8 + CHUNK_FRAMES * 2 + 2];
-  for (;;) {
-    const bool final = job->final.load(); // Before bytes, so the final length is seen.
-    const size_t ready = job->bytes.load() - sent;
-    if (ready < CHUNK_FRAMES * 4 && !(final && ready)) {
-      if (final) return true;
-      vTaskDelay(pdMS_TO_TICKS(10));
-      continue;
-    }
-    const size_t frames = min(ready / 4, CHUNK_FRAMES);
-    snprintf(reinterpret_cast<char *>(chunk), 9, "%06X\r\n", unsigned(frames * 2));
-    const uint8_t *source = job->stereo + sent + AUDIO_AI_MIC_CHANNEL * 2;
-    for (size_t i = 0; i < frames; ++i) {
-      chunk[8 + i * 2] = source[i * 4];
-      chunk[9 + i * 2] = source[i * 4 + 1];
-    }
-    memcpy(chunk + 8 + frames * 2, "\r\n", 2);
-    const size_t length = 10 + frames * 2;
-    if (tls.write(chunk, length) != length) return false;
-    sent += frames * 4;
-  }
+// BLE voice link (Doc/BLE.md): the phone app relays each recording to the
+// Gemini and writes back the chosen clip. Protocol messages on TX:
+//   0x01 start [rate u16]  0x02 audio [seq u8][predictor i16][index u8][nibbles]
+//   0x03 end [samples u32] 0x04 cancel
+// RX accepts replies plus "play:<name>" for manual playback while idle.
+constexpr char VOICE_SERVICE_UUID[] = "6b520010-7c8e-4c30-9aa8-45e626d39b01";
+constexpr char VOICE_TX_UUID[] = "6b520011-7c8e-4c30-9aa8-45e626d39b01";
+constexpr char VOICE_RX_UUID[] = "6b520012-7c8e-4c30-9aa8-45e626d39b01";
+constexpr size_t PACKET_SAMPLES = 320; // 20 ms; 165-byte notifications fit MTU 185.
+constexpr size_t MIN_UPLOAD_SAMPLES = 4000; // Worker rejects under 0.25 s.
+constexpr uint32_t REPLY_TIMEOUT_MS = 30000;
+constexpr uint16_t UPLOAD_RATE = 16000;
+
+struct VoiceReply {
+  char text[64];
+};
+struct VoiceRequest {
+  UploadJob *recording = nullptr;
+  char clip[17] = {};
+  uint32_t generation = 0;
+};
+BLECharacteristic *voice_tx = nullptr;
+BLE2902 *voice_subscription = nullptr;
+QueueHandle_t replies = nullptr;
+QueueHandle_t requests = nullptr;
+std::atomic<bool> link_connected{false};
+std::atomic<uint32_t> link_generation{0}; // Increments on disconnect.
+
+bool link_ready() {
+  return link_connected.load() && voice_subscription && voice_subscription->getNotifications();
 }
 
-// Streams one recording to /intent while it is captured; the Worker picks a
-// prerecorded clip. Returns true once clip audio reached the audio task.
-bool reply_to_recording(HttpSession &session, UploadJob *job) {
-  const uint32_t task_started = millis();
+bool send_message(const uint8_t *data, size_t bytes) {
+  if (!link_ready()) return false;
+  voice_tx->setValue(const_cast<uint8_t *>(data), bytes);
+  voice_tx->notify();
+  return true;
+}
+
+class VoiceRxCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *characteristic) override {
+    const std::string value = characteristic->getValue();
+    if (value.compare(0, 5, "play:") == 0) {
+      const std::string name = value.substr(5);
+      if (name.find('\0') != std::string::npos || !speech_clip_name_valid(name.c_str())) {
+        Serial.println("Speech: invalid manual clip name.");
+        return;
+      }
+      if (!requests || !link_ready()) return;
+      if (busy.exchange(true)) {
+        Serial.println("Speech: request already pending; manual play rejected.");
+        return;
+      }
+      VoiceRequest request;
+      snprintf(request.clip, sizeof(request.clip), "%s", name.c_str());
+      request.generation = link_generation.load();
+      if (xQueueSend(requests, &request, 0) != pdTRUE) busy.store(false);
+      return;
+    }
+    VoiceReply reply = {};
+    snprintf(reply.text, sizeof(reply.text), "%.*s", int(value.size()), value.data());
+    if (replies) xQueueOverwrite(replies, &reply);
+  }
+};
+VoiceRxCallbacks voice_rx_callbacks;
+
+// Streams one recording to the phone while it is captured, then waits for the
+// clip choice. Returns true once clip audio reached the audio task.
+bool reply_to_recording(UploadJob *job) {
+  const uint32_t generation = job->generation;
+  auto connected = [&] { return link_ready() && link_generation.load() == generation; };
   auto fail = [&](const char *message) {
-    session.finish(false); // Closing mid-body cancels the upload before Gemini.
+    const uint8_t cancel = 0x04;
+    if (connected()) send_message(&cancel, 1);
     wait_for_recording(job);
     Serial.println(message);
     return false;
   };
-  if (!network_ready()) return fail("AI: recording not sent.");
-  const uint32_t network_ready_at = millis();
-  Serial.printf("AI timing: task_wait=%lu ms, network_ready=%lu ms (after recording start)\n",
-                static_cast<unsigned long>(task_started - job->started),
-                static_cast<unsigned long>(network_ready_at - job->started));
-  auto &http = session.http;
-  if (!session.begin("https://parrot.eug-krashtan.workers.dev/intent")) return fail("AI: connection failed.");
-  http.addHeader("Authorization", String("Bearer ") + SPEECH_DEVICE_TOKEN);
-  http.addHeader("Content-Type", "audio/L16; rate=16000; channels=1; endianness=little-endian");
-  http.addHeader("Transfer-Encoding", "chunked");
-  const char *headers[] = {"Content-Type"};
-  http.collectHeaders(headers, 1);
-  size_t sent = 0;
-  if (!http.send_request_header("POST") || !send_recording(session.tls, job, sent)) {
-    return fail("AI: upload failed; check Wi-Fi.");
-  }
-  if (sent < 16000) return fail("AI: recording under 0.25 seconds; upload cancelled.");
-  if (session.tls.write(reinterpret_cast<const uint8_t *>("0\r\n\r\n"), 5) != 5) {
-    return fail("AI: upload failed; check Wi-Fi.");
-  }
-  const uint32_t request_started = millis();
-  const int status = http.read_response();
-  const uint32_t headers_at = millis();
-  // upload_tail: recording end until the last chunk was written.
-  Serial.printf("AI timing: upload_tail=%lu ms, post_to_headers=%lu ms, audio=%u ms\n",
-                static_cast<unsigned long>(request_started - job->stopped),
-                static_cast<unsigned long>(headers_at - request_started), unsigned(sent / 64));
-  Serial.printf("AI: HTTP %d\n", status);
-  constexpr size_t MAX_REPLY_BYTES = 8192;
-  if (status != 200 || !http.header("Content-Type").startsWith("application/json") ||
-      http.getSize() > static_cast<int>(MAX_REPLY_BYTES)) {
-    session.finish(false);
-    Serial.println("AI: request failed; check Worker deployment, token, Wi-Fi, or quota.");
-    return false;
-  }
-  std::unique_ptr<uint8_t[]> reply(new (std::nothrow) uint8_t[MAX_REPLY_BYTES]);
-  if (!reply) { session.finish(false); Serial.println("AI: response allocation failed."); return false; }
-  WavSink sink(reply.get(), MAX_REPLY_BYTES);
-  const int received = http.writeToStream(&sink);
-  const uint32_t body_at = millis();
-  session.finish(received > 0 && static_cast<size_t>(received) == sink.used);
-  if (received <= 0 || static_cast<size_t>(received) != sink.used) {
-    Serial.println("AI: incomplete response.");
-    return false;
-  }
-  DynamicJsonDocument result(12288);
-  const auto error = deserializeJson(result, reply.get(), sink.used);
-  if (error || result["ok"] != true || !result["text"].is<const char *>()) {
-    Serial.println("AI: invalid response.");
-    return false;
-  }
-  const uint32_t parsed_at = millis();
-  Serial.printf("AI timing: response_body=%lu ms, parse=%lu ms, total=%lu ms\n",
-                static_cast<unsigned long>(body_at - headers_at),
-                static_cast<unsigned long>(parsed_at - body_at),
-                static_cast<unsigned long>(parsed_at - job->stopped));
-  const JsonObjectConst timing = result["timing_ms"].as<JsonObjectConst>();
-  if (timing["gemini_headers_ms"].is<uint32_t>() && timing["gemini_body_ms"].is<uint32_t>()) {
-    Serial.printf("AI Worker timing: gemini_headers=%lu ms, gemini_body=%lu ms\n",
-                  static_cast<unsigned long>(timing["gemini_headers_ms"].as<uint32_t>()),
-                  static_cast<unsigned long>(timing["gemini_body_ms"].as<uint32_t>()));
-  }
-  if (timing["upload_prepare_ms"].is<uint32_t>() && timing["gemini_ms"].is<uint32_t>() &&
-      timing["worker_total_ms"].is<uint32_t>()) {
-    Serial.printf("AI Worker timing: upload_prepare=%lu ms, gemini=%lu ms, worker_total=%lu ms\n",
-                  static_cast<unsigned long>(timing["upload_prepare_ms"].as<uint32_t>()),
-                  static_cast<unsigned long>(timing["gemini_ms"].as<uint32_t>()),
-                  static_cast<unsigned long>(timing["worker_total_ms"].as<uint32_t>()));
-  } else {
-    Serial.println("AI timing: Worker timings unavailable; deploy the updated Worker.");
-  }
-  Serial.print("AI reply: ");
-  Serial.println(result["text"].as<const char *>());
-  // Ignored speech has an empty clip and plays nothing.
-  const char *clip = result["clip"];
-  return clip && *clip && play_clip(clip, job->stopped);
-}
+  if (!connected()) return fail("AI: phone not connected; recording not sent.");
+  xQueueReset(replies);
+  const uint8_t start[] = {0x01, UPLOAD_RATE & 0xff, UPLOAD_RATE >> 8};
+  if (!send_message(start, sizeof(start))) return fail("AI: phone disconnected.");
 
-QueueHandle_t requests = nullptr;
-
-void keep_alive(HttpSession &session) {
-  // Use the same client, and consume the whole response before allowing reuse.
-  if (!session.begin("https://parrot.eug-krashtan.workers.dev/health")) return;
-  auto &http = session.http;
-  http.setTimeout(3000);
-  const int status = http.GET();
-  uint8_t body[256];
-  WavSink sink(body, sizeof(body));
-  int received = -1;
-  if (status == 200 && http.getSize() <= static_cast<int>(sizeof(body))) {
-    received = http.writeToStream(&sink);
-  }
-  const bool complete = received > 0 && static_cast<size_t>(received) == sink.used;
-  session.finish(complete);
-  http.setTimeout(50000);
-  Serial.printf("HTTP: keep-alive %s (HTTP %d).\n", complete ? "ok" : "failed", status);
-}
-
-void network_task(void *) {
-  HttpSession session;
-  uint32_t last_request_completed = 0;
-  bool active_window = false;
+  SpeechAdpcmState state;
+  uint8_t packet[5 + PACKET_SAMPLES / 2];
+  uint8_t sequence = 0;
+  size_t sent = 0; // Stereo bytes consumed.
+  const auto *stereo = reinterpret_cast<const int16_t *>(job->stereo);
   for (;;) {
-    UploadJob *job = nullptr;
-    if (xQueueReceive(requests, &job, pdMS_TO_TICKS(1000)) != pdTRUE) {
-      if (!active_window) continue;
-      if (WiFi.status() != WL_CONNECTED || millis() - last_request_completed >= CONNECTION_IDLE_MS) {
-        session.finish(false);
-        active_window = false;
-        Serial.println("HTTP: connection closed (offline or 3 minutes idle).");
-      } else if (millis() - session.last_used >= KEEP_ALIVE_MS && session.tls.connected()) {
-        keep_alive(session);
-      }
+    const bool final = job->final.load(); // Before bytes, so the final length is seen.
+    const size_t ready = (job->bytes.load() - sent) / 4;
+    if (ready < PACKET_SAMPLES && !(final && ready)) {
+      if (final) break;
+      if (!connected()) return fail("AI: phone disconnected during upload.");
+      vTaskDelay(pdMS_TO_TICKS(10));
       continue;
     }
-    // Keep modem sleep enabled: this firmware runs Wi-Fi and BLE together.
-    if (WiFi.status() != WL_CONNECTED) session.finish(false);
-    if (!reply_to_recording(session, job)) busy.store(false);
-    // Health requests never extend this window; only completed user jobs do.
-    last_request_completed = millis();
-    active_window = true;
+    const size_t count = min(ready, PACKET_SAMPLES);
+    packet[0] = 0x02;
+    packet[1] = sequence++;
+    packet[2] = uint16_t(state.predictor) & 0xff;
+    packet[3] = uint16_t(state.predictor) >> 8;
+    packet[4] = state.index;
+    speech_adpcm_encode(state, stereo + sent / 2 + AUDIO_AI_MIC_CHANNEL, 2, count, packet + 5);
+    if (!connected() || !send_message(packet, 5 + (count + 1) / 2)) {
+      return fail("AI: phone disconnected during upload.");
+    }
+    sent += count * 4;
   }
+  const uint32_t samples = sent / 4;
+  if (samples < MIN_UPLOAD_SAMPLES) return fail("AI: recording under 0.25 seconds; upload cancelled.");
+  const uint8_t end[] = {0x03, uint8_t(samples), uint8_t(samples >> 8), uint8_t(samples >> 16), uint8_t(samples >> 24)};
+  if (!connected() || !send_message(end, sizeof(end))) return fail("AI: phone disconnected.");
+  const uint32_t upload_done = millis();
+  Serial.printf("AI timing: upload_tail=%lu ms, audio=%u ms\n",
+                static_cast<unsigned long>(upload_done - job->stopped), unsigned(samples / 16));
+
+  VoiceReply reply;
+  bool received = false;
+  while (!received && connected() && millis() - upload_done < REPLY_TIMEOUT_MS) {
+    received = xQueueReceive(replies, &reply, pdMS_TO_TICKS(100)) == pdTRUE;
+  }
+  if (!received || !connected()) {
+    Serial.println(connected() ? "AI: no reply from phone." : "AI: phone disconnected before replying.");
+    return false;
+  }
+  Serial.printf("AI timing: reply=%lu ms after upload, total=%lu ms\n",
+                static_cast<unsigned long>(millis() - upload_done),
+                static_cast<unsigned long>(millis() - job->stopped));
+  Serial.printf("AI reply: %s\n", reply.text);
+  if (strncmp(reply.text, "clip:", 5) == 0) return play_clip(reply.text + 5, job->stopped);
+  return false; // "ignore" plays nothing; errors are printed above.
 }
 
-// Called with busy held, so queue/task initialization cannot race.
-bool enqueue(UploadJob *job) {
-  if (!requests) {
-    requests = xQueueCreate(1, sizeof(UploadJob *));
-    if (!requests) return false;
-    if (xTaskCreate(network_task, "voice_network", 8192, nullptr, 1, nullptr) != pdPASS) {
-      vQueueDelete(requests);
-      requests = nullptr;
-      return false;
-    }
+void voice_task(void *) {
+  for (;;) {
+    VoiceRequest request;
+    if (xQueueReceive(requests, &request, portMAX_DELAY) != pdTRUE) continue;
+    const bool played = request.recording ? reply_to_recording(request.recording) :
+        (link_ready() && link_generation.load() == request.generation && play_clip(request.clip, millis()));
+    if (!played) busy.store(false);
   }
-  return xQueueSend(requests, &job, 0) == pdTRUE;
 }
-#endif
+}
+
+void init_voice_link(BLEServer *server) {
+  replies = xQueueCreate(1, sizeof(VoiceReply));
+  requests = xQueueCreate(1, sizeof(VoiceRequest));
+  if (!replies || !requests ||
+      xTaskCreate(voice_task, "voice_link", 4096, nullptr, 1, nullptr) != pdPASS) {
+    if (replies) vQueueDelete(replies);
+    if (requests) vQueueDelete(requests);
+    replies = requests = nullptr;
+    Serial.println("Voice link: allocation failed; AI requests disabled.");
+    return;
+  }
+  BLEService *service = server->createService(VOICE_SERVICE_UUID);
+  voice_tx = service->createCharacteristic(VOICE_TX_UUID, BLECharacteristic::PROPERTY_NOTIFY);
+  voice_subscription = new BLE2902();
+  // Subscribing requires the bonded, authenticated link, as config writes do.
+  voice_subscription->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
+  voice_tx->addDescriptor(voice_subscription);
+  auto *rx = service->createCharacteristic(VOICE_RX_UUID, BLECharacteristic::PROPERTY_WRITE);
+  rx->setAccessPermissions(ESP_GATT_PERM_WRITE_ENC_MITM);
+  rx->setCallbacks(&voice_rx_callbacks);
+  service->start();
+}
+
+void voice_link_connected() { link_connected.store(true); }
+
+void voice_link_disconnected() {
+  link_generation.fetch_add(1);
+  link_connected.store(false);
+  if (voice_subscription) voice_subscription->setNotifications(false);
 }
 
 // Serial "speech [N|off_K]": plays a clip from LittleFS without the network.
@@ -397,22 +300,26 @@ void request_speech_test(const char *clip) {
   if (!play_clip(name, millis())) busy.store(false);
 }
 
-#if SPEECH_NETWORK
 bool audio_reply_available() {
-  return WiFi.status() == WL_CONNECTED && !busy.load();
+  return link_ready() && !busy.load();
 }
 
 bool begin_audio_reply(const uint8_t *stereo) {
   static_assert(AUDIO_AI_MIC_CHANNEL <= 1 && AUDIO_AI_MIC_CHANNEL >= 0, "Invalid microphone channel");
+  if (!stereo || !requests || !link_ready()) return false;
+  const uint32_t generation = link_generation.load();
   if (busy.exchange(true)) { Serial.println("AI: request already pending; recording not sent."); return false; }
-  // Busy was clear, so the network task no longer reads the previous job.
+  // Busy was clear, so the voice task no longer reads the previous job.
   upload.stereo = stereo;
   upload.bytes.store(0);
   upload.final.store(false);
   upload.started = millis();
-  if (!enqueue(&upload)) {
+  upload.generation = generation;
+  VoiceRequest request;
+  request.recording = &upload;
+  if (xQueueSend(requests, &request, 0) != pdTRUE) {
     busy.store(false);
-    Serial.println("AI: task allocation failed.");
+    Serial.println("AI: voice queue unavailable.");
     return false;
   }
   upload_active = true;
@@ -428,15 +335,6 @@ void audio_reply_progress(size_t bytes, bool final) {
   upload_active = false;
   Serial.printf("AI: recorded %u ms; finishing upload.\n", unsigned(bytes / 64));
 }
-
-#else
-bool audio_reply_available() { return false; }
-bool begin_audio_reply(const uint8_t *) {
-  Serial.println("AI: local device token is unavailable.");
-  return false;
-}
-void audio_reply_progress(size_t, bool) {}
-#endif
 
 SpeechAudio *take_speech_audio() {
   SpeechAudio *audio = ready.exchange(nullptr);
@@ -454,6 +352,9 @@ void release_speech_audio(SpeechAudio *audio) {
   if (audio) release(audio);
 }
 #else
+void init_voice_link(BLEServer *) {}
+void voice_link_connected() {}
+void voice_link_disconnected() {}
 bool audio_reply_available() { return false; }
 void request_speech_test(const char *) { Serial.println("Speech: audio is unavailable."); }
 bool begin_audio_reply(const uint8_t *) { return false; }

@@ -16,6 +16,19 @@ const int16_t STEPS[89] = {
   12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767};
 const int8_t INDEX_CHANGE[8] = {-1, -1, -1, -1, 2, 4, 6, 8};
 
+// Applies one nibble. Exact (2n+1)*step/8 form, matching ffmpeg's encoder and
+// decoder; the BLE encoder uses the same update, so both ends track one state.
+int16_t apply_nibble(int &predictor, int &index, int nibble) {
+  const int diff = ((nibble & 7) * 2 + 1) * STEPS[index] >> 3;
+  predictor += nibble & 8 ? -diff : diff;
+  if (predictor > 32767) predictor = 32767;
+  if (predictor < -32768) predictor = -32768;
+  index += INDEX_CHANGE[nibble & 7];
+  if (index < 0) index = 0;
+  if (index > 88) index = 88;
+  return static_cast<int16_t>(predictor);
+}
+
 struct ClipLayout {
   const uint8_t *data = nullptr;
   size_t data_bytes = 0;
@@ -84,21 +97,38 @@ bool speech_clip_decode(const uint8_t *wav, size_t bytes, int16_t *stereo, size_
     ++out;
     for (size_t i = 4; i < length && out < frames; ++i) {
       for (int shift = 0; shift <= 4 && out < frames; shift += 4) {
-        const int nibble = (block[i] >> shift) & 0x0f;
-        const int step = STEPS[index];
-        // Exact (2n+1)*step/8 form, matching ffmpeg's encoder and decoder.
-        const int diff = ((nibble & 7) * 2 + 1) * step >> 3;
-        predictor += nibble & 8 ? -diff : diff;
-        if (predictor > 32767) predictor = 32767;
-        if (predictor < -32768) predictor = -32768;
-        index += INDEX_CHANGE[nibble & 7];
-        if (index < 0) index = 0;
-        if (index > 88) index = 88;
-        stereo[out * 2] = stereo[out * 2 + 1] = static_cast<int16_t>(predictor);
+        stereo[out * 2] = stereo[out * 2 + 1] = apply_nibble(predictor, index, (block[i] >> shift) & 0x0f);
         ++out;
       }
     }
   }
+  return true;
+}
+
+void speech_adpcm_encode(SpeechAdpcmState &state, const int16_t *samples, size_t stride,
+                         size_t count, uint8_t *out) {
+  int predictor = state.predictor, index = state.index;
+  for (size_t i = 0; i < count; ++i) {
+    const int delta = samples[i * stride] - predictor;
+    const int magnitude = (delta < 0 ? -delta : delta) * 4 / STEPS[index];
+    // Truncation picks the nearest (2n+1)*step/8 level.
+    const int nibble = (magnitude > 7 ? 7 : magnitude) | (delta < 0 ? 8 : 0);
+    apply_nibble(predictor, index, nibble);
+    if (i % 2) out[i / 2] |= nibble << 4;
+    else out[i / 2] = nibble;
+  }
+  state.predictor = static_cast<int16_t>(predictor);
+  state.index = static_cast<uint8_t>(index);
+}
+
+bool speech_adpcm_decode(SpeechAdpcmState &state, const uint8_t *in, size_t count, int16_t *samples) {
+  if (state.index > 88) return false;
+  int predictor = state.predictor, index = state.index;
+  for (size_t i = 0; i < count; ++i) {
+    samples[i] = apply_nibble(predictor, index, (in[i / 2] >> (i % 2 ? 4 : 0)) & 0x0f);
+  }
+  state.predictor = static_cast<int16_t>(predictor);
+  state.index = static_cast<uint8_t>(index);
   return true;
 }
 

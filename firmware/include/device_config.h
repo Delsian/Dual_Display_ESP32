@@ -4,22 +4,11 @@
 #include <stdint.h>
 #include <Arduino.h>
 
-constexpr unsigned MAX_WIFI_NETWORKS = 8;
-struct WifiNetwork {
-  String ssid;
-  String password;
-};
-
 struct DeviceConfig {
   uint32_t audio_volume;
-  uint32_t wifi_setup_timeout_seconds;
-  uint32_t wifi_connect_timeout_seconds;
-  uint32_t wifi_retry_interval_ms;
-  unsigned wifi_network_count;
-  WifiNetwork wifi_networks[MAX_WIFI_NETWORKS];
 };
 
-// Call once after mounting LittleFS, before starting audio/network tasks.
+// Call once after mounting LittleFS, before starting audio/BLE tasks.
 void load_device_config();
 const DeviceConfig &device_config();
 // Persist for the next boot; does not mutate the running configuration.
