@@ -565,6 +565,26 @@ class VoiceRelay(
         bleOperation { connection.writeCharacteristic(characteristic) }
     }
 
+    fun setSleeping(sleeping: Boolean) {
+        if (!hasBluetoothPermission() || !subscribed || gatt == null || rx == null) {
+            listener.onStatus("Connect and wait for Ready before Sleep/WakeUp")
+            return
+        }
+        if (writePending) {
+            listener.onStatus("Wait for the current BLE write to finish")
+            return
+        }
+        if (sleeping) {
+            generation.incrementAndGet()
+            pcm.reset()
+            voiceBusy = false
+        } else if (voiceBusy) {
+            listener.onStatus("Wait for the current request to finish")
+            return
+        }
+        writeReply(if (sleeping) "sleep" else "wakeup")
+    }
+
     private fun wav(pcm: ByteArray, rate: Int): ByteArray {
         val output = ByteArray(44 + pcm.size)
         val view = ByteBuffer.wrap(output).order(ByteOrder.LITTLE_ENDIAN)

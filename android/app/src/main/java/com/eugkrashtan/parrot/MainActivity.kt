@@ -95,6 +95,14 @@ class MainActivity : Activity() {
         root.addView(settings, buttonParams())
         root.addView(scan, buttonParams())
         root.addView(disconnect, buttonParams())
+        root.addView(Button(this).apply {
+            text = "Sleep"
+            setOnClickListener { relay?.setSleeping(true) ?: showMessage("Wait for relay service") }
+        }, buttonParams())
+        root.addView(Button(this).apply {
+            text = "WakeUp"
+            setOnClickListener { relay?.setSleeping(false) ?: showMessage("Wait for relay service") }
+        }, buttonParams())
         root.addView(clip, buttonParams())
         root.addView(play, buttonParams())
         root.addView(Button(this).apply {

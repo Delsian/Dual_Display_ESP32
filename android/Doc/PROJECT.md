@@ -49,11 +49,15 @@ firmware internals belong to the sibling project.
 - Android owns the relay UI, permissions, BLE client, decoding, and HTTP client.
   Firmware owns capture and local clip playback. Android calls Gemini to select the intent; Cloudflare is no longer required.
 - Manual playback uses the shared BLE contract and requires updated firmware.
+  Sleep/WakeUp controls force eyes/audio-off idle or restore activity while
+  retaining BLE; these controls also require updated firmware.
   Connecting and playing stored clips does not require an API key; the app
   confirms BLE delivery only, with playback errors available on firmware serial.
 - Battery is read on connection and updated through notifications, separately from
   voice packets. The service retains the value across activity reopening and clears
   it on disconnect; unavailable/invalid values show a dash. BLE contract is unchanged.
+  The foreground notification shows Parrot battery alongside relay status and uses
+  a dedicated monochrome parrot small icon; battery updates refresh it immediately.
 - Start enables persistent background operation; Stop disables it. The service
   recovers after disconnection, Bluetooth toggles and eligible process/boot restarts.
   Firmware pairing still requires user approval where bonds are not retained.

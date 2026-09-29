@@ -1,9 +1,14 @@
 # Current project status
 
-Updated: 2026-09-29. Scope: persistent BLE bonding enabled and build-tested.
+Updated: 2026-09-29. Scope: app-controlled Sleep/WakeUp idle.
 
 ## Implemented and build-tested
 
+- Boot and each spoken reply start a five-minute offline active window.
+  App Sleep forces eyes/audio off with BLE retained; WakeUp restores activity.
+  Offline capture plays random off_*.wav fallback clips; connected relay flow stays.
+  Window expiry turns off eyes/audio; one subsequent idle hour sleeps until RESET.
+  Target build and active-window host checks passed; hardware validation pending.
 - Secure Connections/MITM bonding enabled with encryption/identity key distribution.
   Target build passed; reconnect/reboot bond reuse still needs hardware validation.
   Android needs no code change; forget any obsolete phone pairing and pair once again.
@@ -21,9 +26,7 @@ Updated: 2026-09-29. Scope: persistent BLE bonding enabled and build-tested.
 - Config retains version/volume; old fields are ignored at boot and omitted
   on save. BLE patches reject removed fields; voice protocol is unchanged.
 
-- Recording jobs now pass through the requests queue to the BLE voice task.
-- Voice service initializes on the same GATT server as config and battery,
-  before advertising; connect/disconnect callbacks are wired in.
+- Voice requests use a queue and the shared config/battery GATT server.
 - Disconnect invalidates the recording's connection generation and subscription;
   reply waiting exits within its 100 ms polling interval. Failed streaming holds
   busy until capture finalizes, protecting the shared recording buffer.
@@ -41,7 +44,6 @@ Updated: 2026-09-29. Scope: persistent BLE bonding enabled and build-tested.
   one-second cooldown. KEY1 remains available.
 - `AUDIO_AI_REPLY_TEST=1`, `AUDIO_VOICE_ACTIVATION=1`, microphone channel 0.
 - Energy detection can trigger on background sounds; tune `AUDIO_VAD_MIN_RMS`.
-- Worker retired; Android calls Gemini directly. BLE contract now includes device logs.
 - Log upload/hardware checks pending: pairing gate, MTUs, reconnects, loss handling,
   and concurrent audio/animation. Existing clients require no counterpart changes.
 - Topic generator syntax/catalog parity passed; live Gemini/hardware checks pending.

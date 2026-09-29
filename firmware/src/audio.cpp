@@ -6,6 +6,8 @@
 #include "speech_test.h"
 #include "audio_vad.h"
 #include "speech_clip.h"
+#include "ble_config.h"
+#include "activity.h"
 
 #if USE_AUDIO
 #include <Wire.h>
@@ -111,6 +113,7 @@ void audio_task(void *) {
   uint8_t *preroll = record_buffer + BUFFER_BYTES;
   size_t pre_write = 0, pre_used = 0;
   uint32_t last_blocked = millis();
+  unsigned long connection_generation = ble_disconnect_generation();
   AudioVad vad(AUDIO_VAD_MIN_RMS, SAMPLE_RATE * AUDIO_VAD_START_MS / 1000,
                SAMPLE_RATE * AUDIO_VAD_SILENCE_MS / 1000);
 
@@ -138,6 +141,29 @@ void audio_task(void *) {
     if (result != ESP_OK || received % FRAME_BYTES != 0) {
       DeviceLog.println("Audio: microphone read failed; audio task stopped.");
       break;
+    }
+
+    const unsigned long generation = ble_disconnect_generation();
+    if (!device_active() || generation != connection_generation) {
+      connection_generation = generation;
+      if (state == State::Recording) finish_recording("idle or phone disconnected");
+      digitalWrite(PIN_AUDIO_PA, LOW);
+      if (state != State::Idle || speech) {
+        if (!set_audio_rate(SAMPLE_RATE)) break;
+      }
+      release_speech_audio(speech);
+      speech = nullptr;
+      release_speech_audio(take_speech_audio());
+      state = State::Idle;
+      recorded = 0;
+      pre_write = pre_used = 0;
+      vad.reset();
+      last_blocked = millis();
+      // A held button must be released and pressed again after reconnecting.
+      stable_pressed = previous_raw = digitalRead(PIN_KEY1) == LOW;
+      changed_at = millis();
+      vTaskDelay(1);
+      continue;
     }
 
     bool raw_pressed = digitalRead(PIN_KEY1) == LOW;
@@ -182,6 +208,7 @@ void audio_task(void *) {
         silence_written = 0;
         if (!set_audio_rate(SPEECH_CLIP_SAMPLE_RATE)) break;
         digitalWrite(PIN_AUDIO_PA, HIGH);
+        restart_active_window();
         state = State::Playing;
         DeviceLog.println("Speech: playing AI voice.");
       }
@@ -260,6 +287,7 @@ void audio_task(void *) {
         // Push more silence than the entire TX DMA ring before muting the PA.
         if (silence_written >= 5 * CHUNK_BYTES) {
           digitalWrite(PIN_AUDIO_PA, LOW);
+          restart_active_window();
           if (speech && !set_audio_rate(SAMPLE_RATE)) break;
           release_speech_audio(speech);
           speech = nullptr;

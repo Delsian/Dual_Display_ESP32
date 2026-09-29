@@ -12,6 +12,8 @@
 
 #include "device_log.h"
 #include <Arduino.h>
+#include <driver/gpio.h>
+#include <esp_sleep.h>
 #include "config.h"
 // #include "esp32-hal-log.h" // Disabled for debugging
 #include "LittleFS.h"
@@ -23,6 +25,7 @@
 #include "serial_commands.h"
 #include "device_config.h"
 #include "ble_config.h"
+#include "activity.h"
 
 // --- FPS Counter Variables ---
 // --- LED Blink Configuration ---
@@ -74,6 +77,13 @@ int get_battery_percentage() {
  * @brief Initializes all subsystems.
  */
 void setup() {
+  // Release shutdown pin holds before normal display/audio initialization.
+  gpio_deep_sleep_hold_dis();
+  gpio_hold_dis(static_cast<gpio_num_t>(TFT_BL));
+  gpio_hold_dis(static_cast<gpio_num_t>(TFT_BL_R));
+  #if USE_AUDIO
+    gpio_hold_dis(static_cast<gpio_num_t>(PIN_AUDIO_PA));
+  #endif
   // Add a fixed delay to give the serial monitor time to connect.
   delay(2000);
 
@@ -127,6 +137,7 @@ void setup() {
   #endif
   // --- End of disabled section ---
 
+  restart_active_window();
   #if USE_AUDIO
     if (!init_audio()) {
       DeviceLog.println("Audio unavailable; continuing without recording/playback.");
@@ -165,6 +176,37 @@ void main_loop() {
     current_fps = frame_count / ((current_millis - last_fps_time) / 1000.0f);
     last_fps_time = current_millis;
     frame_count = 0;
+  }
+
+  // Keep advertising and battery updates alive while the eyes are off.
+  const bool awake = device_active();
+  constexpr unsigned long IDLE_SHUTDOWN_MS = 60UL * 60UL * 1000UL;
+  static unsigned long idle_since = current_millis;
+  static unsigned long idle_generation = ble_disconnect_generation();
+  const unsigned long generation = ble_disconnect_generation();
+  // A new disconnect resets the timer even if a brief connection occurred
+  // entirely between render-loop iterations. Unsigned subtraction handles wrap.
+  if (awake || ble_connected() || generation != idle_generation) idle_since = current_millis;
+  idle_generation = generation;
+  digitalWrite(TFT_BL, awake ? TFT_BACKLIGHT_ON : !TFT_BACKLIGHT_ON);
+  digitalWrite(TFT_BL_R, awake ? TFT_BACKLIGHT_ON : !TFT_BACKLIGHT_ON);
+  if (!awake) {
+    if (current_millis - idle_since >= IDLE_SHUTDOWN_MS && !device_active() && !ble_connected() &&
+        ble_disconnect_generation() == idle_generation) {
+      DeviceLog.println("Idle for one hour: shutting down. Press RESET to restart.");
+      // Preserve dark displays and a muted amplifier throughout deep sleep.
+      gpio_hold_en(static_cast<gpio_num_t>(TFT_BL));
+      gpio_hold_en(static_cast<gpio_num_t>(TFT_BL_R));
+      #if USE_AUDIO
+        digitalWrite(PIN_AUDIO_PA, LOW);
+        gpio_hold_en(static_cast<gpio_num_t>(PIN_AUDIO_PA));
+      #endif
+      gpio_deep_sleep_hold_en();
+      esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+      esp_deep_sleep_start(); // No timer, GPIO, or BLE wake; hardware reset only.
+    }
+    delay(20);
+    return;
   }
 
   // --- 1. Sensor Update ---

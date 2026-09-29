@@ -62,6 +62,10 @@ class RelayService : Service(), VoiceRelay.Listener {
             else onStatus("Start background relay first")
         }
         fun stop() = stopRelay()
+        fun setSleeping(sleeping: Boolean) {
+            if (foreground) relay.setSleeping(sleeping)
+            else onStatus("Start background relay first")
+        }
     }
     private val binder = LocalBinder()
     private val bluetoothState = object : BroadcastReceiver() {
@@ -146,6 +150,7 @@ class RelayService : Service(), VoiceRelay.Listener {
     override fun onBatteryLevel(level: Int?) {
         batteryLevel = level
         batteryObserver?.invoke(level)
+        if (foreground) getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
     }
 
     override fun onDeviceLog(text: String) {
@@ -181,9 +186,10 @@ class RelayService : Service(), VoiceRelay.Listener {
         val stop = PendingIntent.getService(this, 1, Intent(this, RelayService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("Parrot relay")
+            .setSmallIcon(R.drawable.ic_notification_parrot)
+            .setContentTitle("Parrot relay · ${batteryLevel?.let { "$it%" } ?: "—"}")
             .setContentText(status)
+            .setStyle(Notification.BigTextStyle().bigText(status))
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

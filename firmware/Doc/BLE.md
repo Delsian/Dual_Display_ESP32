@@ -179,7 +179,44 @@ reserves the shared busy flag, and queues decoding to the voice task. Pending
 recording/reply/clip requests reject manual commands; they never enter the reply
 queue. A queued command is dropped if its connection changes before processing.
 An already playing clip can have one subsequent clip pending, using the existing
-playback handoff. Playback already handed to the audio task survives disconnect.
+playback handoff. Disconnect stops playback and discards queued clips.
+
+### Disconnected idle (2026-09-29)
+
+Android **Sleep** and **WakeUp** write `sleep` and `wakeup` to authenticated voice
+RX. These commands bypass the playback/request busy gate. Sleep cancels the
+current voice job and forces eyes/audio off while leaving BLE connected; WakeUp
+clears that override and starts a fresh five-minute active window. Sleep remains
+in effect across reconnects until WakeUp or reset. Clip playback cannot wake it.
+The one-hour deep-sleep timer runs only while disconnected, so a connected app
+can always request WakeUp. Writes confirm transport delivery, not device state;
+older firmware does not support these commands. Both firmware and app updates
+are required; no new UUIDs or notification packets are introduced.
+
+Boot starts a five-minute active window with eyes and audio enabled even offline.
+Every spoken clip restarts that window at playback start and completion. While
+disconnected and active, voice/KEY1 capture uses a random local off_*.wav fallback
+after at least 0.25 seconds of captured audio; no BLE recording packets are sent.
+The energy detector cannot distinguish speech from all background sounds offline.
+A connected central keeps the device active; connected capture still requires
+the authenticated voice subscription. Disconnect cancels the old connection's
+work; remaining active-window time allows new offline captures.
+
+When the window expires without a connection, backlights and eye rendering turn
+off, recording/playback stop, and the amplifier is muted. Microphone DMA is
+drained and discarded while idle; codecs are not powered down.
+Advertising and battery updates continue for up to one continuous hour of idle.
+Then the ESP32 enters deep sleep with all wake sources disabled: BLE advertising
+stops and reconnecting cannot wake it. Press the hardware RESET button to restart
+(KEY1 is not a wake button). Reconnecting before shutdown resets the idle timer;
+the shutdown timer starts only after the active window expires.
+Backlight and amplifier outputs are held off during sleep. This is MCU deep sleep,
+not a board power disconnect; peripheral power consumption is hardware-unverified.
+A BLE connection before shutdown restores the displays
+so the pairing code remains visible; voice capture additionally requires the
+authenticated voice notification subscription. A held KEY1 must be released and
+pressed again. No packet changes or Android changes are required.
+Build-tested; hardware disconnect/reconnect validation is pending.
 
 The GATT write acknowledgment confirms delivery, not successful playback. Busy,
 missing-file and decoding failures are reported on firmware serial; no new

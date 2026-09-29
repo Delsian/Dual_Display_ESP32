@@ -20,6 +20,8 @@ constexpr size_t MAX_PATCH = 4096;
 constexpr size_t PAGE_SIZE = 400;
 std::atomic<uint32_t> pairing_code{0};
 std::atomic<bool> pairing_visible{false};
+std::atomic<bool> connected{false};
+std::atomic<unsigned long> disconnect_generation{0};
 DeviceConfig saved_config;
 String patch;
 bool overflow = false;
@@ -47,8 +49,13 @@ class SecurityCallbacks : public BLESecurityCallbacks {
 };
 
 class ServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer *) override { voice_link_connected(); }
+  void onConnect(BLEServer *) override {
+    voice_link_connected();
+    connected.store(true);
+  }
   void onDisconnect(BLEServer *) override {
+    connected.store(false);
+    disconnect_generation.fetch_add(1);
     device_log_disconnected();
     voice_link_disconnected();
     // Retain pairing keys, but require fresh subscriptions on each connection.
@@ -124,6 +131,9 @@ ServerCallbacks server_callbacks;
 PatchCallbacks patch_callbacks;
 ControlCallbacks control_callbacks;
 } // namespace
+
+bool ble_connected() { return connected.load(); }
+unsigned long ble_disconnect_generation() { return disconnect_generation.load(); }
 
 void init_ble_config(int battery_percentage) {
   saved_config = device_config();

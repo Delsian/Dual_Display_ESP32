@@ -11,9 +11,9 @@ void voice_link_disconnected();
 
 // Plays a LittleFS clip locally: "12" -> clips/012.wav, "off_3", or random if empty.
 void request_speech_test(const char *clip);
-// Voice activation must pause while offline, unconfigured, or a request is pending.
+// Capture is available for a subscribed relay or offline fallback while active.
 bool audio_reply_available();
-// Audio task only. Starts uploading a recording while it is captured into
+// Audio task only. Starts a relay upload or offline fallback job, capturing into
 // `stereo`, which must stay unchanged until audio_reply_available() is true.
 bool begin_audio_reply(const uint8_t *stereo);
 // Publishes captured bytes; final ends the upload, cancelling it under 0.25 s.

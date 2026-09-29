@@ -5,9 +5,15 @@
 The firmware streams recordings over BLE to the Android relay, which sends
 them directly to Gemini. Gemini picks one
 topic from `backend/topics.json`; the device plays that answer from LittleFS.
-Off-topic questions play a random fallback; noise plays nothing. The app has
+With the phone, off-topic questions play a random fallback; noise plays nothing. The app has
 no TTS: all speech is prerecorded. To test clips without the network, send
 `speech 12` (clips/012.wav), `speech off_3`, or `speech` (random) on serial.
+
+Boot enables five minutes of offline activity. Without a phone, completed voice
+or KEY1 captures of at least 0.25 seconds play a random `off_*.wav` clip. Each
+played response restarts the five-minute window; noise may also trigger the energy
+detector offline. Window expiry turns off eyes/audio, followed by reset-only deep
+sleep after one idle hour. Hardware validation of these transitions is pending.
 
 1. Edit `backend/topics.json`: `id` (1–999), `topic` (description Gemini matches
    against; English is fine) and `answer` (Ukrainian text to voice), plus `fallbacks`.

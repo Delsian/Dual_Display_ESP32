@@ -24,6 +24,12 @@ The app calls Gemini directly; Cloudflare and a device token are no longer requi
 
 ## Background relay
 
+After the relay is Ready, **Sleep** turns off Parrot's eyes/audio while retaining
+the BLE connection; **WakeUp** restores activity and its five-minute offline
+window. These controls require matching updated firmware. Sleep cancels the
+current voice request. If a BLE write is already pending, retry after it finishes.
+Deep sleep after one hour of disconnected idle still requires hardware RESET.
+
 The main screen shows **Parrot battery: N%** from the device's BLE battery service.
 It reads the level on connection and listens for changes while connected. The service
 keeps the latest value when you close and reopen the activity. A dash means the level

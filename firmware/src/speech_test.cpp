@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #include "config.h"
 #include "speech_test.h"
+#include "ble_config.h"
+#include "activity.h"
 
 #if USE_AUDIO
 #include "speech_clip.h"
@@ -16,6 +18,7 @@
 struct SpeechAudio {
   explicit SpeechAudio(int16_t *data) : pcm(data) {}
   int16_t *pcm;
+  unsigned long generation = 0;
   std::atomic<size_t> bytes{0};
   std::atomic<bool> done{false};
   std::atomic<int> owners{2};  // Network and audio tasks; the last one frees.
@@ -41,6 +44,8 @@ void hand_off(SpeechAudio *audio) {
 
 // Decodes a prerecorded reply from LittleFS and hands it to the audio task.
 bool play_clip(const char *name, uint32_t started) {
+  const unsigned long generation = ble_disconnect_generation();
+  if (!device_active()) return false;
   constexpr size_t MAX_CLIP_BYTES = 128 * 1024; // Ample bound for ten seconds of 16 kHz ADPCM plus headers.
   if (!speech_clip_name_valid(name)) { DeviceLog.println("Speech: invalid clip name."); return false; }
   char path[32];
@@ -66,6 +71,7 @@ bool play_clip(const char *name, uint32_t started) {
     return false;
   }
   audio->bytes.store(frames * 4);
+  audio->generation = generation;
   audio->done.store(true);
   ready.store(audio);
   DeviceLog.printf("Speech timing: clip=%s, frames=%u, load=%lu ms, total=%lu ms\n", name, unsigned(frames),
@@ -77,11 +83,12 @@ bool play_clip(const char *name, uint32_t started) {
 }
 
 // Picks a random clip name from /clips; returns false if none exist.
-bool random_clip(char *name, size_t size) {
+bool random_clip(char *name, size_t size, bool fallback_only = false) {
   File dir = LittleFS.open("/clips");
   size_t count = 0;
   for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
     const String file = f.name();
+    if (fallback_only && !file.startsWith("off_")) continue;
     // Reservoir sampling: one pass, uniform choice without storing names.
     if (!file.endsWith(".wav") || file.length() - 4 >= size || random(++count) != 0) continue;
     snprintf(name, size, "%.*s", int(file.length() - 4), file.c_str());
@@ -98,6 +105,7 @@ struct UploadJob {
   uint32_t started = 0; // Recording start.
   uint32_t stopped = 0; // Recording end; written before final.
   uint32_t generation = 0; // Connection that accepted this recording.
+  bool offline = false;
 };
 UploadJob upload;
 bool upload_active = false; // Audio task only.
@@ -148,6 +156,12 @@ bool send_message(const uint8_t *data, size_t bytes) {
 class VoiceRxCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *characteristic) override {
     const std::string value = characteristic->getValue();
+    if (value == "sleep" || value == "wakeup") {
+      set_device_sleeping(value == "sleep");
+      if (value == "sleep") link_generation.fetch_add(1);
+      DeviceLog.println(value == "sleep" ? "Device: sleeping (BLE stays connected)." : "Device: awake.");
+      return;
+    }
     if (value.compare(0, 5, "play:") == 0) {
       const std::string name = value.substr(5);
       if (name.find('\0') != std::string::npos || !speech_clip_name_valid(name.c_str())) {
@@ -244,8 +258,20 @@ void voice_task(void *) {
   for (;;) {
     VoiceRequest request;
     if (xQueueReceive(requests, &request, portMAX_DELAY) != pdTRUE) continue;
-    const bool played = request.recording ? reply_to_recording(request.recording) :
-        (link_ready() && link_generation.load() == request.generation && play_clip(request.clip, millis()));
+    bool played = false;
+    if (request.recording && request.recording->offline) {
+      auto *job = request.recording;
+      wait_for_recording(job);
+      char name[20];
+      if (device_active() && job->generation == link_generation.load() &&
+          job->bytes.load() / 4 >= MIN_UPLOAD_SAMPLES) {
+        if (random_clip(name, sizeof(name), true)) played = play_clip(name, job->started);
+        else DeviceLog.println("Speech: no fallback clips in /clips.");
+      }
+    } else {
+      played = request.recording ? reply_to_recording(request.recording) :
+          (link_ready() && link_generation.load() == request.generation && play_clip(request.clip, millis()));
+    }
     if (!played) busy.store(false);
   }
 }
@@ -302,12 +328,12 @@ void request_speech_test(const char *clip) {
 }
 
 bool audio_reply_available() {
-  return link_ready() && !busy.load();
+  return requests && device_active() && (link_ready() || !ble_connected()) && !busy.load();
 }
 
 bool begin_audio_reply(const uint8_t *stereo) {
   static_assert(AUDIO_AI_MIC_CHANNEL <= 1 && AUDIO_AI_MIC_CHANNEL >= 0, "Invalid microphone channel");
-  if (!stereo || !requests || !link_ready()) return false;
+  if (!stereo || !audio_reply_available()) return false;
   const uint32_t generation = link_generation.load();
   if (busy.exchange(true)) { DeviceLog.println("AI: request already pending; recording not sent."); return false; }
   // Busy was clear, so the voice task no longer reads the previous job.
@@ -316,6 +342,7 @@ bool begin_audio_reply(const uint8_t *stereo) {
   upload.final.store(false);
   upload.started = millis();
   upload.generation = generation;
+  upload.offline = !ble_connected();
   VoiceRequest request;
   request.recording = &upload;
   if (xQueueSend(requests, &request, 0) != pdTRUE) {
@@ -340,6 +367,10 @@ void audio_reply_progress(size_t bytes, bool final) {
 SpeechAudio *take_speech_audio() {
   SpeechAudio *audio = ready.exchange(nullptr);
   if (audio) hand_off(audio);
+  if (audio && (!device_active() || audio->generation != ble_disconnect_generation())) {
+    release(audio);
+    return nullptr;
+  }
   return audio;
 }
 

@@ -1,19 +1,21 @@
 # Current Android project status
 
-Updated: 2026-09-29. Scope: common device/app logs and AI request counters.
+Updated: 2026-09-29. Scope: notification battery percentage and parrot icon.
 
 ## Implemented in source
 
+- Sleep/WakeUp buttons send authenticated voice commands via the relay service.
+  Sleep cancels AI results and retains BLE; matching firmware/hardware checks required.
+- Reference-inspired pirate-parrot adaptive launcher icon added; phone launcher check pending.
 - Common Logs shows device text dark blue and app text black, with Follow/Clear.
   AI counters track total/free/paid/succeeded/failed/pending classification calls;
   request logs show IDs, durations, results/safe errors. Clear preserves counters.
-  Relay service
-  retains 32K characters in memory across window/activity closure; no disk logging.
+  Relay service retains 32K characters across activity closure; no disk logging.
 - Authenticated log subscription is serialized with battery/voice setup. Decoder
   reassembles bounded UTF-8 lines, marks packet/overflow loss and resets on reconnect.
   Missing log service leaves voice working; stale GATT callbacks are ignored.
-- Main screen shows battery percentage from BLE read/notifications; service
-  caches it across UI rebinding and clears on disconnect. Invalid values show a dash.
+- Main screen and notification show battery percentage; notification uses a parrot icon.
+  Service caches it across UI rebinding and clears on disconnect; unknown shows a dash.
 - RelayService owns BLE/AI independently of MainActivity. Start/Stop and notification
   Stop control persisted enablement; boot/update and sticky restart are supported.
 - Low-power discovery and 5–30 s reconnect backoff handle disconnect/Bluetooth changes;
@@ -31,9 +33,8 @@ Updated: 2026-09-29. Scope: common device/app logs and AI request counters.
   history limits, rebinding and Clear. Battery, fallback and prior lifecycle tests pass.
   Common-log tests cover source colors, counters, retry events and safe error summaries.
 - No live Gemini call or physical phone/ESP32 test was performed for this change.
-- Logs require firmware with the device log endpoint; see the shared BLE contract.
-  No protocol changes were needed in this Android task. Firmware upload is pending.
-- Firmware does not retain bonds: reconnect may require passkey approval.
+- Sleep/WakeUp and logs require matching firmware; see the shared BLE contract.
+  Firmware/app deployment and hardware Sleep/WakeUp checks are pending.
 - Restart remains subject to Android/vendor policy; force-stop requires reopening.
   Multiple Parrots use the first match. Log history is lost on service destruction.
 - GitButler reports setup required; no session branch/commits/history changes made.

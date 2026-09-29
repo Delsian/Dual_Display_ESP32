@@ -290,6 +290,24 @@ class RelayLifecycleTest {
         assertNull(level)
     }
 
+    @Test fun notificationShowsBatteryUpdatesAndClearsDisconnectedValue() {
+        val service = service()
+        service.onStartCommand(Intent().setAction(RelayService.ACTION_START), 0, 1)
+        val initial = shadowOf(service).lastForegroundNotification!!
+        assertEquals(R.drawable.ic_notification_parrot, initial.smallIcon.resId)
+        assertTrue(initial.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString().contains("—"))
+        val manager = shadowOf(app.getSystemService(android.app.NotificationManager::class.java))
+        service.onStatus("Ready")
+        for (level in listOf(73, 0, 100, null)) {
+            service.onBatteryLevel(level)
+            val notification = manager.allNotifications.single()
+            assertEquals("Parrot relay · Battery: ${level?.let { "$it%" } ?: "—"}",
+                notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString())
+            assertEquals("Ready", notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
+            assertEquals(R.drawable.ic_notification_parrot, notification.smallIcon.resId)
+        }
+    }
+
     @Test fun deviceLogNotificationsAreDecodedAndOldConnectionsIgnored() {
         val output = StringBuilder()
         val relay = VoiceRelay(app, object : VoiceRelay.Listener {

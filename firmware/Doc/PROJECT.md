@@ -47,7 +47,12 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
 - BLE-only voice transport, with no Wi-Fi fallback. Native Android 12+ relay
   source is in `../android`; Android build and device validation are tracked there.
   Wi-Fi provisioning, settings and dependencies were removed on 2026-09-27.
-  Local serial clip playback runs in a separate task.
+  Local serial clip playback runs in a separate task. Boot starts a five-minute
+  active window; each played response restarts it. While disconnected and active,
+  captured speech gets a random local fallback. A connected phone keeps the device
+  active. Once the offline window expires, eyes/audio turn off; after one hour in
+  disconnected idle, deep sleep disables BLE until the reset button restarts it.
+  App Sleep forces eyes/audio off while retaining BLE; WakeUp restores activity.
 - Capture ends at five seconds or silence. BLE streams packetized IMA ADPCM
   while recording; the Android relay decodes to PCM and calls Gemini.
   Requests are independent, without conversation history. Protocol finalization
