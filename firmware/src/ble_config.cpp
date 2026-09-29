@@ -8,6 +8,7 @@
 #include "device_config.h"
 #include "drawing_tools.h"
 #include "speech_test.h"
+#include "activity.h"
 #include "device_log.h"
 
 namespace {
@@ -58,6 +59,8 @@ class ServerCallbacks : public BLEServerCallbacks {
     disconnect_generation.fetch_add(1);
     device_log_disconnected();
     voice_link_disconnected();
+    // Treat connection loss like startup, including clearing app-requested sleep.
+    set_device_sleeping(false);
     // Retain pairing keys, but require fresh subscriptions on each connection.
     battery_notifications->setNotifications(false);
     battery_notifications->setIndications(false);

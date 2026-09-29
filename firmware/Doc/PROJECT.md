@@ -48,7 +48,8 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
   source is in `../android`; Android build and device validation are tracked there.
   Wi-Fi provisioning, settings and dependencies were removed on 2026-09-27.
   Local serial clip playback runs in a separate task. Boot starts a five-minute
-  active window; each played response restarts it. While disconnected and active,
+  active window; BLE disconnect clears manual sleep and starts the same window.
+  Each played response restarts it. While disconnected and active,
   captured speech gets a random local fallback. A connected phone keeps the device
   active. Once the offline window expires, eyes/audio turn off; after one hour in
   disconnected idle, deep sleep disables BLE until the reset button restarts it.

@@ -19,6 +19,7 @@ constexpr i2s_port_t AUDIO_PORT = I2S_NUM_0;
 constexpr uint32_t SAMPLE_RATE = 16000; // Recording rate; clips use 24 kHz.
 constexpr size_t FRAME_BYTES = 2 * sizeof(int16_t);
 constexpr size_t CHUNK_BYTES = 256 * FRAME_BYTES;
+constexpr uint32_t AUDIO_TASK_STACK_BYTES = 8192;
 constexpr size_t BUFFER_BYTES = SAMPLE_RATE * FRAME_BYTES * AUDIO_RECORD_SECONDS;
 constexpr size_t PREROLL_BYTES = SAMPLE_RATE * FRAME_BYTES * AUDIO_VAD_PREROLL_MS / 1000;
 constexpr uint32_t DEBOUNCE_MS = 20;
@@ -108,8 +109,10 @@ void audio_task(void *) {
   size_t played = 0;
   size_t silence_written = 0;
   SpeechAudio *speech = nullptr; // Reply audio, possibly still downloading.
-  uint8_t chunk[CHUNK_BYTES];
-  const uint8_t silence[CHUNK_BYTES] = {};
+  // Only one audio task exists. Keep the 2 KB buffers off its call stack so
+  // driver, BLE readiness and logging calls have room for their own frames.
+  static uint8_t chunk[CHUNK_BYTES];
+  static const uint8_t silence[CHUNK_BYTES] = {};
   uint8_t *preroll = record_buffer + BUFFER_BYTES;
   size_t pre_write = 0, pre_used = 0;
   uint32_t last_blocked = millis();
@@ -344,7 +347,7 @@ bool init_audio() {
   bool installed = i2s_driver_install(AUDIO_PORT, &config, 0, nullptr) == ESP_OK;
   if (installed && i2s_set_pin(AUDIO_PORT, &pins) == ESP_OK &&
       i2s_zero_dma_buffer(AUDIO_PORT) == ESP_OK && init_codecs() &&
-      xTaskCreate(audio_task, "audio", 4096, nullptr, 2, &audio_task_handle) == pdPASS) {
+      xTaskCreate(audio_task, "audio", AUDIO_TASK_STACK_BYTES, nullptr, 2, &audio_task_handle) == pdPASS) {
     #if AUDIO_AI_REPLY_TEST
     #if AUDIO_VOICE_ACTIVATION
     DeviceLog.println("Audio ready: speak to ask AI; KEY1 overrides. Stops on silence or at 5 seconds.");

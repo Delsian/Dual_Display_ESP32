@@ -1,11 +1,11 @@
 # Current project status
 
-Updated: 2026-09-29. Scope: app-controlled Sleep/WakeUp idle.
+Updated: 2026-09-29. Scope: audio stack-overflow fix built; hardware retest pending.
 
 ## Implemented and build-tested
 
-- Boot and each spoken reply start a five-minute offline active window.
-  App Sleep forces eyes/audio off with BLE retained; WakeUp restores activity.
+- Boot, BLE disconnect, and each spoken reply start a five-minute active window.
+  App Sleep turns eyes/audio off; WakeUp or disconnect clears the sleep override.
   Offline capture plays random off_*.wav fallback clips; connected relay flow stays.
   Window expiry turns off eyes/audio; one subsequent idle hour sleeps until RESET.
   Target build and active-window host checks passed; hardware validation pending.
@@ -26,7 +26,8 @@ Updated: 2026-09-29. Scope: app-controlled Sleep/WakeUp idle.
 - Config retains version/volume; old fields are ignored at boot and omitted
   on save. BLE patches reject removed fields; voice protocol is unchanged.
 
-- Voice requests use a queue and the shared config/battery GATT server.
+- Audio stack-canary crash matched ELF 6125ac863604268d. Buffers moved off stack;
+  Stack is now 8 KB, frame 2208 → 160 bytes; build passed. Hardware retest pending.
 - Disconnect invalidates the recording's connection generation and subscription;
   reply waiting exits within its 100 ms polling interval. Failed streaming holds
   busy until capture finalizes, protecting the shared recording buffer.
@@ -34,7 +35,6 @@ Updated: 2026-09-29. Scope: app-controlled Sleep/WakeUp idle.
   with AddressSanitizer and UndefinedBehaviorSanitizer. BLE hardware unverified.
 - 16 kHz mono IMA ADPCM: all 60 clips regenerated; sanitized decoder tests
   passed and every clip matched ffmpeg. Filesystem and firmware builds passed.
-- Firmware + filesystem uploaded to /dev/ttyACM0 with verified flash hashes.
 
 ## Hardware evidence and current limits
 - Native Android relay source exists in the sibling project; its build/device

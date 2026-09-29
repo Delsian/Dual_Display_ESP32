@@ -186,8 +186,9 @@ playback handoff. Disconnect stops playback and discards queued clips.
 Android **Sleep** and **WakeUp** write `sleep` and `wakeup` to authenticated voice
 RX. These commands bypass the playback/request busy gate. Sleep cancels the
 current voice job and forces eyes/audio off while leaving BLE connected; WakeUp
-clears that override and starts a fresh five-minute active window. Sleep remains
-in effect across reconnects until WakeUp or reset. Clip playback cannot wake it.
+clears that override and starts a fresh five-minute active window. BLE disconnect
+also clears the override and restarts that window, just like boot. Clip playback
+cannot wake a device while the manual sleep override is still set.
 The one-hour deep-sleep timer runs only while disconnected, so a connected app
 can always request WakeUp. Writes confirm transport delivery, not device state;
 older firmware does not support these commands. Both firmware and app updates
@@ -200,7 +201,8 @@ after at least 0.25 seconds of captured audio; no BLE recording packets are sent
 The energy detector cannot distinguish speech from all background sounds offline.
 A connected central keeps the device active; connected capture still requires
 the authenticated voice subscription. Disconnect cancels the old connection's
-work; remaining active-window time allows new offline captures.
+work and starts a fresh five-minute window for new offline captures and fallback
+replies, even if the device was previously put to sleep from the app.
 
 When the window expires without a connection, backlights and eye rendering turn
 off, recording/playback stop, and the amplifier is muted. Microphone DMA is
