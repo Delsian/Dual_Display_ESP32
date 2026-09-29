@@ -7,10 +7,13 @@ scan, and connect from inside the app.
 
 Configuration reads and writes require encrypted, authenticated BLE pairing.
 When prompted, enter the six-digit code displayed on the left TFT (also printed
-on serial). Pairing temporarily replaces the left eye. This implementation does
-not request bonding; reconnecting
-can require pairing again. If a phone retains an obsolete bond, forget it and
-pair again.
+on serial). Pairing temporarily replaces the left eye. Firmware requests Secure
+Connections with authenticated persistent bonding. Bluedroid stores bond keys in
+NVS; the phone and device can reuse them after disconnects and device restarts.
+Notification subscriptions are still reset and must be enabled on each connection.
+After upgrading from non-bonding firmware, forget an obsolete Parrot pairing on
+the phone and pair once again. Erasing device flash/NVS removes stored bonds.
+Bond reuse across reconnection/power cycles is implemented but hardware-unverified.
 
 ## Configuration service and characteristics
 
@@ -247,6 +250,9 @@ to replace the device's saved settings with your local `data/` files.
   subscribing again.
 - Check that an unauthenticated read/write prompts pairing and an incorrect code
   cannot access config; pair with the displayed code.
+- After pairing, disconnect/reconnect, reboot the device, and power-cycle it;
+  verify protected config/voice/log access without a new passkey prompt after
+  restoring subscriptions. Also verify forgetting the phone bond permits pairing again.
 - Save a volume patch, read it back, reboot, and check that volume persists.
 - Send multiple consecutive patches and verify omitted fields remain unchanged.
 - Send malformed JSON, an invalid volume, and an oversized buffer; verify the

@@ -1,9 +1,12 @@
 # Current project status
 
-Updated: 2026-09-29. Scope: BLE device log endpoint added and build-tested.
+Updated: 2026-09-29. Scope: persistent BLE bonding enabled and build-tested.
 
 ## Implemented and build-tested
 
+- Secure Connections/MITM bonding enabled with encryption/identity key distribution.
+  Target build passed; reconnect/reboot bond reuse still needs hardware validation.
+  Android needs no code change; forget any obsolete phone pairing and pair once again.
 - Authenticated BLE log notifications mirror application serial output through a
   bounded queue/background task, with sequence/drop counters. Passkeys stay serial-only.
   Target build and sanitized buffer tests passed (fragmentation, overflow, reset/wrap).

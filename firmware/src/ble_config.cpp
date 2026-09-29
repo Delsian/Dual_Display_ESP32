@@ -51,7 +51,7 @@ class ServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer *) override {
     device_log_disconnected();
     voice_link_disconnected();
-    // Pairing is not bonded; each connection must subscribe again.
+    // Retain pairing keys, but require fresh subscriptions on each connection.
     battery_notifications->setNotifications(false);
     battery_notifications->setIndications(false);
     patch = "";
@@ -134,9 +134,12 @@ void init_ble_config(int battery_percentage) {
   BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
   BLEDevice::setSecurityCallbacks(&security_callbacks);
   BLESecurity security;
-  security.setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM);
+  // Bluedroid persists bond keys in NVS; reconnects reuse the authenticated bond.
+  security.setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
   security.setCapability(ESP_IO_CAP_OUT);
   security.setKeySize(16);
+  security.setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  security.setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
   BLEServer *server = BLEDevice::createServer();
   server->setCallbacks(&server_callbacks);
   BLEService *service = server->createService(SERVICE_UUID);

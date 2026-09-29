@@ -79,7 +79,14 @@ class MainActivity : Activity() {
         val play = Button(this).apply {
             text = "Play"
             setOnClickListener {
-                relay?.play(clip.text.toString()) ?: showMessage("Wait for relay service")
+                val enteredClip = clip.text.toString()
+                val clipNumber = enteredClip.toIntOrNull()
+                val clipName = if (clipNumber != null && clipNumber > 50) {
+                    "off_${clipNumber - 50}"
+                } else {
+                    enteredClip
+                }
+                relay?.play(clipName) ?: showMessage("Wait for relay service")
             }
         }
         root.addView(TextView(this).apply { text = "Parrot Relay" })

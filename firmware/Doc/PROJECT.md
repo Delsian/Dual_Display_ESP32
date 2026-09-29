@@ -62,6 +62,10 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
 
 ## Integration boundaries
 
+- BLE pairing uses Secure Connections with MITM protection and persistent NVS
+  bonding. Initial pairing requires the displayed passkey; reconnects resubscribe
+  to notifications while reusing stored keys. See BLE.md for recovery/validation.
+
 [BLE.md](BLE.md) is the authoritative shared BLE contract. Firmware owns capture
 and clip playback; Android owns its UI, permissions, BLE client, decoding, and
 HTTP client. Read Android context only for specific integration questions;
