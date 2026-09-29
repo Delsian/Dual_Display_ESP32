@@ -82,3 +82,32 @@ EyePosition get_eye_position(int eye_index) {
     }
     return EyePosition{0.0f, 0.0f}; // Return a default/safe value by explicitly constructing it
 }
+
+uint8_t update_eye_blink(uint32_t now_ms) {
+    constexpr uint32_t closing_ms = 80;
+    constexpr uint32_t closed_ms = 40;
+    constexpr uint32_t opening_ms = 140;
+    static bool initialized = false;
+    static uint32_t cycle_start_ms = 0;
+    static uint32_t open_ms = 0;
+
+    if (!initialized) {
+        initialized = true;
+        cycle_start_ms = now_ms;
+        open_ms = random(3000, 7001);
+    }
+
+    // Unsigned subtraction keeps timing correct across millis() rollover.
+    uint32_t elapsed = now_ms - cycle_start_ms;
+    if (elapsed < open_ms) return 0;
+    elapsed -= open_ms;
+    if (elapsed < closing_ms) return (elapsed * 128U) / closing_ms;
+    elapsed -= closing_ms;
+    if (elapsed < closed_ms) return 128;
+    elapsed -= closed_ms;
+    if (elapsed < opening_ms) return 128U - (elapsed * 128U) / opening_ms;
+
+    cycle_start_ms = now_ms;
+    open_ms = random(3000, 7001);
+    return 0;
+}

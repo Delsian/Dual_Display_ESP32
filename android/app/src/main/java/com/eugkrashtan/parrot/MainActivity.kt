@@ -3,7 +3,12 @@ package com.eugkrashtan.parrot
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
-import android.bluetooth.BluetoothAdapter
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.Build
+import android.os.IBinder
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.ViewGroup
@@ -14,19 +19,32 @@ import android.widget.TextView
 import android.widget.Toast
 import kotlin.concurrent.thread
 
-class MainActivity : Activity(), VoiceRelay.Listener {
+class MainActivity : Activity() {
     private lateinit var status: TextView
-    private lateinit var relay: VoiceRelay
+    private lateinit var battery: TextView
+    private var relay: RelayService.LocalBinder? = null
+    private var bound = false
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, service: IBinder) {
+            relay = service as RelayService.LocalBinder
+            relay?.observe { onStatus(it) }
+            relay?.observeBattery { onBatteryLevel(it) }
+        }
+        override fun onServiceDisconnected(name: ComponentName) {
+            relay = null
+            onBatteryLevel(null)
+            onStatus("Relay restarting")
+        }
+    }
     private lateinit var keyStore: ApiKeyStore
     private var settingsDialog: AlertDialog? = null
     private var config = VoiceRelay.Config("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        relay = VoiceRelay(this, this)
         keyStore = ApiKeyStore(this)
         val keyLoaded = try {
-            config = VoiceRelay.Config(keyStore.read())
+            config = VoiceRelay.Config(keyStore.read(), ApiKeyStore(this, paid = true).read())
             true
         } catch (_: Exception) { false }
 
@@ -35,27 +53,19 @@ class MainActivity : Activity(), VoiceRelay.Listener {
             setPadding(32, 32, 32, 32)
         }
         status = TextView(this).apply { text = "Disconnected" }
+        battery = TextView(this).apply { text = "Parrot battery: —" }
         if (!keyLoaded) status.text = "Could not read saved API key; open Settings"
         val settings = Button(this).apply {
             text = "Settings"
             setOnClickListener { showSettings() }
         }
         val scan = Button(this).apply {
-            text = "Scan and connect"
-            setOnClickListener {
-                if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
-                    checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                    requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT), 100)
-                } else if (BluetoothAdapter.getDefaultAdapter()?.isEnabled != true) {
-                    showMessage("Enable Bluetooth first")
-                } else {
-                    relay.scanAndConnect()
-                }
-            }
+            text = "Start background relay"
+            setOnClickListener { requestRelayStart() }
         }
         val disconnect = Button(this).apply {
-            text = "Disconnect"
-            setOnClickListener { relay.close() }
+            text = "Stop background relay"
+            setOnClickListener { relay?.stop() }
         }
         val clip = EditText(this).apply {
             hint = "ESP32 clip: 001 or off_1"
@@ -65,10 +75,13 @@ class MainActivity : Activity(), VoiceRelay.Listener {
         }
         val play = Button(this).apply {
             text = "Play"
-            setOnClickListener { relay.playStoredClip(clip.text.toString()) }
+            setOnClickListener {
+                relay?.play(clip.text.toString()) ?: showMessage("Wait for relay service")
+            }
         }
         root.addView(TextView(this).apply { text = "Parrot Relay" })
         root.addView(status)
+        root.addView(battery)
         root.addView(settings, buttonParams())
         root.addView(scan, buttonParams())
         root.addView(disconnect, buttonParams())
@@ -77,78 +90,133 @@ class MainActivity : Activity(), VoiceRelay.Listener {
         setContentView(root)
     }
 
+    override fun onStart() {
+        super.onStart()
+        bound = bindService(Intent(this, RelayService::class.java), connection, Context.BIND_AUTO_CREATE)
+        if (RelayService.isEnabled(this) && RelayService.hasBluetoothPermissions(this)) startRelay()
+    }
+
+    override fun onStop() {
+        relay?.observe(null)
+        relay?.observeBattery(null)
+        onBatteryLevel(null)
+        relay = null
+        if (bound) unbindService(connection)
+        bound = false
+        super.onStop()
+    }
+
+    private fun requestRelayStart() {
+        val permissions = mutableListOf<String>()
+        if (!RelayService.hasBluetoothPermissions(this)) {
+            permissions += Manifest.permission.BLUETOOTH_SCAN
+            permissions += Manifest.permission.BLUETOOTH_CONNECT
+        }
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            permissions += Manifest.permission.POST_NOTIFICATIONS
+        }
+        if (permissions.isEmpty()) startRelay()
+        else requestPermissions(permissions.toTypedArray(), 100)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 100) return
+        if (RelayService.hasBluetoothPermissions(this)) startRelay()
+        else showMessage("Nearby devices permission is required")
+    }
+
+    private fun startRelay() {
+        try { RelayService.start(this) }
+        catch (_: RuntimeException) { showMessage("Could not start background relay; try again") }
+    }
+
     private fun showSettings() {
         if (settingsDialog?.isShowing == true) return
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 16, 32, 16)
         }
-        val apiKey = EditText(this).apply {
-            hint = "Gemini API key"
-            setText(config.apiKey)
-            isSingleLine = true
-            isSaveEnabled = false
-            importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or
-                android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        val result = TextView(this).apply {
-            text = if (config.apiKey.isEmpty()) "No API key saved" else "API key saved"
-        }
-        val add = Button(this).apply { text = "Add" }
-        val test = Button(this).apply { text = "Test" }
-        content.addView(apiKey)
-        content.addView(TextView(this).apply { text = "Add saves the key. Test checks the entered key with Gemini." })
-        content.addView(add)
-        content.addView(test)
-        content.addView(result)
         val dialog = AlertDialog.Builder(this)
             .setTitle("Settings")
-            .setView(content)
+            .setView(android.widget.ScrollView(this).apply { addView(content) })
             .setNegativeButton("Close", null)
             .create()
         settingsDialog = dialog
-        add.setOnClickListener {
-            val key = apiKey.text.toString().trim()
-            if (key.isEmpty()) {
-                result.text = "Enter a Gemini API key first"
-            } else {
-                try {
-                    keyStore.save(key)
-                    config = VoiceRelay.Config(key)
-                    result.text = "API key saved"
-                } catch (_: Exception) {
-                    result.text = "Could not save API key; try again"
+        content.addView(TextView(this).apply {
+            text = "Free key is tried first. On error, the paid key is used for one hour, then free is retried."
+        })
+        fun addKeyControls(paid: Boolean) {
+            val label = if (paid) "Paid" else "Free"
+            val store = if (paid) ApiKeyStore(this, paid = true) else keyStore
+            val saved = if (paid) config.paidApiKey else config.apiKey
+            content.addView(TextView(this).apply { text = "$label Gemini API key" })
+            val apiKey = EditText(this).apply {
+                hint = if (paid) "Optional paid fallback key" else "Free Gemini API key"
+                setText(saved)
+                isSingleLine = true
+                isSaveEnabled = false
+                importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO
+                inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                    android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            }
+            val result = TextView(this).apply {
+                text = if (saved.isEmpty()) "No $label key saved" else "$label key saved"
+            }
+            val add = Button(this).apply { text = "Save $label key" }
+            val test = Button(this).apply { text = "Test $label key" }
+            content.addView(apiKey)
+            content.addView(TextView(this).apply {
+                text = if (paid) "Save an empty value to disable paid fallback. Test uses the entered key without saving."
+                    else "Save applies the key. Test checks the entered key without saving."
+            })
+            content.addView(add)
+            content.addView(test)
+            content.addView(result)
+            add.setOnClickListener {
+                val key = apiKey.text.toString().trim()
+                if (key.isEmpty() && !paid) {
+                    result.text = "Enter a Gemini API key first"
+                } else {
+                    try {
+                        store.save(key)
+                        config = if (paid) config.copy(paidApiKey = key) else config.copy(apiKey = key)
+                        result.text = if (key.isEmpty()) "Paid fallback disabled" else "$label key saved"
+                    } catch (_: Exception) {
+                        result.text = "Could not save API key; try again"
+                    }
                 }
             }
-        }
-        test.setOnClickListener {
-            val key = apiKey.text.toString().trim()
-            if (key.isEmpty()) {
-                result.text = "Enter a Gemini API key first"
-                return@setOnClickListener
-            }
-            apiKey.isEnabled = false
-            add.isEnabled = false
-            test.isEnabled = false
-            result.text = "Testing…"
-            thread(name = "parrot-key-test") {
-                val message = try {
-                    val catalog = assets.open("intent_topics.json").bufferedReader().use { it.readText() }
-                    GeminiIntent(catalog).testKey(key)
-                } catch (_: Exception) {
-                    "Could not test API key; try again"
+            test.setOnClickListener {
+                val key = apiKey.text.toString().trim()
+                if (key.isEmpty()) {
+                    result.text = "Enter a Gemini API key first"
+                    return@setOnClickListener
                 }
-                runOnUiThread {
-                    if (!isDestroyed && dialog.isShowing) {
-                        result.text = message
-                        apiKey.isEnabled = true
-                        add.isEnabled = true
-                        test.isEnabled = true
+                apiKey.isEnabled = false
+                add.isEnabled = false
+                test.isEnabled = false
+                result.text = "Testing…"
+                thread(name = "parrot-key-test") {
+                    val message = try {
+                        val catalog = assets.open("intent_topics.json").bufferedReader().use { it.readText() }
+                        GeminiIntent(catalog).testKey(key)
+                    } catch (_: Exception) {
+                        "Could not test API key; try again"
+                    }
+                    runOnUiThread {
+                        if (!isDestroyed && dialog.isShowing) {
+                            result.text = message
+                            apiKey.isEnabled = true
+                            add.isEnabled = true
+                            test.isEnabled = true
+                        }
                     }
                 }
             }
         }
+        addKeyControls(paid = false)
+        addKeyControls(paid = true)
         dialog.show()
     }
 
@@ -157,10 +225,12 @@ class MainActivity : Activity(), VoiceRelay.Listener {
         ViewGroup.LayoutParams.WRAP_CONTENT,
     )
 
-    override fun relayConfig(): VoiceRelay.Config = config
-
-    override fun onStatus(message: String) {
+    private fun onStatus(message: String) {
         runOnUiThread { status.text = message }
+    }
+
+    private fun onBatteryLevel(level: Int?) {
+        runOnUiThread { battery.text = level?.let { "Parrot battery: $it%" } ?: "Parrot battery: —" }
     }
 
     private fun showMessage(message: String) {
@@ -170,7 +240,6 @@ class MainActivity : Activity(), VoiceRelay.Listener {
 
     override fun onDestroy() {
         settingsDialog?.dismiss()
-        relay.close()
         super.onDestroy()
     }
 }

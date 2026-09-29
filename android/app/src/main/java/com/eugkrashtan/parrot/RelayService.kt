@@ -1,0 +1,175 @@
+package com.eugkrashtan.parrot
+
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.os.Binder
+import android.os.Build
+import android.os.IBinder
+import android.os.PowerManager
+
+/** Owns BLE and AI work independently of the activity. */
+class RelayService : Service(), VoiceRelay.Listener {
+    private lateinit var relay: VoiceRelay
+    private lateinit var keyStore: ApiKeyStore
+    private lateinit var paidKeyStore: ApiKeyStore
+    private lateinit var requestWakeLock: PowerManager.WakeLock
+    private var foreground = false
+    private var status = "Background relay stopped"
+    private var observer: ((String) -> Unit)? = null
+    private var batteryLevel: Int? = null
+    private var batteryObserver: ((Int?) -> Unit)? = null
+
+    inner class LocalBinder : Binder() {
+        fun observeBattery(listener: ((Int?) -> Unit)?) {
+            batteryObserver = listener
+            listener?.invoke(batteryLevel)
+        }
+        fun observe(listener: ((String) -> Unit)?) {
+            observer = listener
+            listener?.invoke(status)
+        }
+        fun play(clip: String) {
+            if (foreground) relay.playStoredClip(clip)
+            else onStatus("Start background relay first")
+        }
+        fun stop() = stopRelay()
+    }
+    private val binder = LocalBinder()
+    private val bluetoothState = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED && foreground) {
+                relay.bluetoothStateChanged()
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        keyStore = ApiKeyStore(this)
+        paidKeyStore = ApiKeyStore(this, paid = true)
+        requestWakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Parrot:VoiceRequest").apply {
+                setReferenceCounted(false)
+            }
+        relay = VoiceRelay(applicationContext, this)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(CHANNEL, "Parrot background relay", NotificationManager.IMPORTANCE_LOW))
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(bluetoothState, filter, RECEIVER_EXPORTED)
+        else registerReceiver(bluetoothState, filter)
+    }
+
+    override fun onBind(intent: Intent): IBinder = binder
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            stopRelay()
+            return START_NOT_STICKY
+        }
+        if (intent?.action != ACTION_START && !isEnabled(this)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (!hasBluetoothPermissions(this)) {
+            stopRelay()
+            onStatus("Grant Nearby devices permission, then start background relay")
+            return START_NOT_STICKY
+        }
+        try {
+            startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } catch (_: RuntimeException) {
+            stopRelay()
+            onStatus("Open the app to start background relay")
+            return START_NOT_STICKY
+        }
+        foreground = true
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(ENABLED, true).apply()
+        relay.start()
+        return START_STICKY
+    }
+
+    private fun stopRelay() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(ENABLED, false).apply()
+        foreground = false
+        relay.close()
+        onStatus("Background relay stopped")
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    override fun relayConfig(): VoiceRelay.Config = VoiceRelay.Config(
+        try { keyStore.read() } catch (_: Exception) { "" },
+        try { paidKeyStore.read() } catch (_: Exception) { "" },
+    )
+
+    override fun onStatus(message: String) {
+        status = message
+        observer?.invoke(message)
+        if (foreground) getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
+    }
+
+    override fun onRequestActive(active: Boolean) {
+        if (active) requestWakeLock.acquire(40_000)
+        else if (requestWakeLock.isHeld) requestWakeLock.release()
+    }
+
+    override fun onBatteryLevel(level: Int?) {
+        batteryLevel = level
+        batteryObserver?.invoke(level)
+    }
+
+    private fun notification(): Notification {
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val stop = PendingIntent.getService(this, 1, Intent(this, RelayService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE)
+        return Notification.Builder(this, CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setContentTitle("Parrot relay")
+            .setContentText(status)
+            .setContentIntent(open)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .addAction(Notification.Action.Builder(null, "Stop", stop).build())
+            .build()
+    }
+
+    override fun onDestroy() {
+        foreground = false
+        observer = null
+        batteryObserver = null
+        relay.close()
+        unregisterReceiver(bluetoothState)
+        super.onDestroy()
+    }
+
+    companion object {
+        const val ACTION_START = "com.eugkrashtan.parrot.START_RELAY"
+        const val ACTION_STOP = "com.eugkrashtan.parrot.STOP_RELAY"
+        private const val CHANNEL = "parrot_relay"
+        private const val NOTIFICATION_ID = 1
+        private const val PREFS = "relay_service"
+        private const val ENABLED = "enabled"
+
+        fun isEnabled(context: Context): Boolean =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(ENABLED, false)
+
+        fun hasBluetoothPermissions(context: Context): Boolean =
+            context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+
+        fun start(context: Context) {
+            context.startForegroundService(Intent(context, RelayService::class.java).setAction(ACTION_START))
+        }
+    }
+}

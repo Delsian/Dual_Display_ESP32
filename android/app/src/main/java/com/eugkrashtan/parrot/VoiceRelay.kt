@@ -11,6 +11,10 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanSettings
+import android.os.ParcelUuid
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Handler
@@ -23,16 +27,25 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
-class VoiceRelay(private val context: Context, private val listener: Listener) {
+class VoiceRelay(
+    private val context: Context,
+    private val listener: Listener,
+    private val classifyRecording: (ByteArray, String) -> String = GeminiIntent(
+        context.assets.open("intent_topics.json").bufferedReader().use { it.readText() }
+    )::classify,
+    private val executeRequest: (() -> Unit) -> Unit = { work -> thread(name = "parrot-gemini") { work() } },
+) {
     interface Listener {
         fun relayConfig(): Config
         fun onStatus(message: String)
+        fun onRequestActive(active: Boolean) {}
+        fun onBatteryLevel(level: Int?) {}
     }
 
-    data class Config(val apiKey: String)
+    data class Config(val apiKey: String, val paidApiKey: String = "")
 
     private val generation = AtomicLong()
-    private val classifier = GeminiIntent(context.assets.open("intent_topics.json").bufferedReader().use { it.readText() })
+    private val keyFallback = GeminiKeyFallback { SystemClock.elapsedRealtime() }
 
     private val adapter = BluetoothAdapter.getDefaultAdapter()
     private val scanner get() = adapter?.bluetoothLeScanner
@@ -40,105 +53,136 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
     private var gatt: BluetoothGatt? = null
     private var rx: BluetoothGattCharacteristic? = null
     private var tx: BluetoothGattCharacteristic? = null
+    private var battery: BluetoothGattCharacteristic? = null
     private var pcm = ByteArrayOutputStream()
     private var expectedSamples = 0
     private var sampleRate = 16000
     private var subscribed = false
     private var voiceBusy = false
+        set(value) {
+            field = value
+            listener.onRequestActive(value)
+        }
+    private var running = false
+    private var activeScan: ScanCallback? = null
+    private var activeScanner: BluetoothLeScanner? = null
+    private var retryDelay = 5_000L
+    private val reconnect = Runnable { scanAndConnect() }
+    private val setupTimeout = Runnable { retry("Connection or pairing timed out") }
+    private val writeTimeout = Runnable { retry("BLE write timed out") }
     private var writePending = false
     private var pendingPlay: String? = null
 
-    private val scanCallback = object : ScanCallback() {
-        override fun onScanResult(type: Int, result: ScanResult) {
-            val name = result.device.name ?: return
-            if (name.startsWith("Parrot-")) {
-                stopScan()
-                listener.onStatus("Connecting to $name")
-                connect(result.device)
-            }
-        }
-
-        override fun onScanFailed(errorCode: Int) {
-            listener.onStatus("BLE scan failed: $errorCode")
-        }
-    }
-
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+            if (!running || this@VoiceRelay.gatt !== gatt) return
+            if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                retry("Bluetooth permission unavailable")
+                return
+            }
+            if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
+                retry("Disconnected; waiting for Parrot")
+            } else if (newState == BluetoothProfile.STATE_CONNECTED) {
                 listener.onStatus("Connected; discovering services")
-                gatt.discoverServices()
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                main.post {
-                    if (this@VoiceRelay.gatt === gatt) {
-                        listener.onStatus("Disconnected")
-                        close()
-                    }
-                }
+                bleOperation { gatt.discoverServices() }
             }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (!running || this@VoiceRelay.gatt !== gatt) return
+            if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                retry("Bluetooth permission unavailable")
+                return
+            }
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                listener.onStatus("Service discovery failed: $status")
+                retry("Service discovery failed: $status")
                 return
             }
             val service = gatt.getService(VOICE_SERVICE) ?: run {
-                listener.onStatus("Voice service not found")
+                retry("Voice service not found")
                 return
             }
             tx = service.getCharacteristic(VOICE_TX)
             rx = service.getCharacteristic(VOICE_RX)
             if (tx == null || rx == null) {
-                listener.onStatus("Voice characteristics not found")
+                retry("Voice characteristics not found")
                 return
             }
-            listener.onStatus("Negotiating BLE MTU")
-            gatt.requestMtu(185)
+            battery = gatt.getService(BATTERY_SERVICE)?.getCharacteristic(BATTERY_LEVEL)
+            val level = battery
+            bleOperation {
+                if (level != null && gatt.readCharacteristic(level)) true
+                else gatt.requestMtu(185)
+            }
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            if (!running || this@VoiceRelay.gatt !== gatt) return
+            if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                retry("Bluetooth permission unavailable")
+                return
+            }
             if (status != BluetoothGatt.GATT_SUCCESS || mtu < 168) {
-                listener.onStatus("BLE MTU too small: $mtu")
+                retry("BLE MTU too small: $mtu")
                 return
             }
-            val characteristic = tx ?: return
-            if (!gatt.setCharacteristicNotification(characteristic, true)) {
-                listener.onStatus("Could not subscribe to audio")
-                return
+            bleOperation {
+                val characteristic = battery
+                val descriptor = characteristic?.getDescriptor(CCCD)
+                if (characteristic != null && descriptor != null &&
+                    gatt.setCharacteristicNotification(characteristic, true)) {
+                    descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    if (gatt.writeDescriptor(descriptor)) return@bleOperation true
+                }
+                subscribeVoice(gatt)
+                true
             }
-            val descriptor = characteristic.getDescriptor(CCCD) ?: run {
-                listener.onStatus("Notification descriptor missing")
-                return
-            }
-            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-            listener.onStatus("Subscribing to audio")
-            gatt.writeDescriptor(descriptor)
+        }
+
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            batteryRead(gatt, characteristic, characteristic.value ?: byteArrayOf(), status)
+        }
+
+        override fun onCharacteristicRead(
+            gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int,
+        ) {
+            batteryRead(gatt, characteristic, value, status)
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            main.post {
-                if (this@VoiceRelay.gatt !== gatt) return@post
-                subscribed = status == BluetoothGatt.GATT_SUCCESS
-                listener.onStatus(if (subscribed) "Ready" else "Subscription failed")
+            if (!running || this@VoiceRelay.gatt !== gatt || descriptor.uuid != CCCD) return
+            if (descriptor.characteristic === battery) {
+                subscribeVoice(gatt)
+                return
             }
+            if (descriptor.characteristic !== tx) return
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                retry("Subscription failed; check pairing")
+                return
+            }
+            subscribed = true
+            retryDelay = 5_000L
+            main.removeCallbacks(setupTimeout)
+            listener.onStatus("Ready")
         }
 
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
             main.post {
                 if (this@VoiceRelay.gatt !== gatt || characteristic.uuid != VOICE_RX) return@post
+                main.removeCallbacks(writeTimeout)
                 writePending = false
                 val clip = pendingPlay
                 pendingPlay = null
-                if (status != BluetoothGatt.GATT_SUCCESS) listener.onStatus("BLE write failed: $status")
+                if (clip == null) voiceBusy = false
+                if (status != BluetoothGatt.GATT_SUCCESS) retry("BLE write failed: $status")
                 else if (clip != null) listener.onStatus("Play request sent: $clip")
             }
         }
 
         @Suppress("DEPRECATION")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            val packet = characteristic.value.copyOf()
-            main.post { if (this@VoiceRelay.gatt === gatt) handlePacket(packet) }
+            routeNotification(gatt, characteristic, characteristic.value ?: byteArrayOf())
         }
 
         override fun onCharacteristicChanged(
@@ -146,49 +190,178 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
-            val packet = value.copyOf()
-            main.post { if (this@VoiceRelay.gatt === gatt) handlePacket(packet) }
+            routeNotification(gatt, characteristic, value)
         }
     }
 
     @SuppressLint("MissingPermission")
-    fun scanAndConnect() {
-        if (!hasBluetoothPermission()) {
-            listener.onStatus("Grant Bluetooth Nearby devices permission")
+    private fun batteryRead(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic,
+                            value: ByteArray, status: Int) {
+        if (!running || gatt !== connection || characteristic !== battery) return
+        if (status == BluetoothGatt.GATT_SUCCESS) updateBattery(value)
+        listener.onStatus("Negotiating BLE MTU")
+        bleOperation { connection.requestMtu(185) }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun subscribeVoice(connection: BluetoothGatt) {
+        val characteristic = tx ?: return
+        val descriptor = characteristic.getDescriptor(CCCD) ?: run {
+            retry("Notification descriptor missing")
             return
         }
+        listener.onStatus("Subscribing; approve pairing if requested")
+        bleOperation {
+            if (!connection.setCharacteristicNotification(characteristic, true)) false
+            else {
+                descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                connection.writeDescriptor(descriptor)
+            }
+        }
+    }
+
+    private fun updateBattery(value: ByteArray) {
+        val level = value.singleOrNull()?.toInt()?.and(0xff)
+        listener.onBatteryLevel(level?.takeIf { it in 0..100 })
+    }
+
+    private fun routeNotification(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic,
+                                  value: ByteArray) {
+        val packet = value.copyOf()
+        main.post {
+            if (!running || gatt !== connection) return@post
+            when (characteristic) {
+                battery -> updateBattery(packet)
+                tx -> handlePacket(packet)
+            }
+        }
+    }
+
+    /** All connection state and GATT callbacks run on the main looper. */
+    fun start() {
+        running = true
+        scanAndConnect()
+    }
+
+    fun bluetoothStateChanged() {
+        if (!running) return
+        main.removeCallbacks(reconnect)
         stopScan()
-        listener.onStatus("Scanning for Parrot")
-        scanner?.startScan(scanCallback)
-        main.postDelayed({
-            stopScan()
-            if (gatt == null) listener.onStatus("No Parrot found")
-        }, 12_000)
+        clearConnection()
+        scanAndConnect()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun scanAndConnect() {
+        if (!running || gatt != null || activeScan != null) return
+        if (!hasBluetoothPermission()) {
+            listener.onStatus("Grant Nearby devices permission, then start relay again")
+            return
+        }
+        if (runCatching { adapter?.isEnabled }.getOrNull() != true) {
+            listener.onStatus("Waiting for Bluetooth to be enabled")
+            return
+        }
+        val scan = object : ScanCallback() {
+            override fun onScanResult(type: Int, result: ScanResult) {
+                main.post {
+                    if (!running || activeScan !== this || gatt != null) return@post
+                    stopScan()
+                    connect(result.device)
+                }
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                main.post {
+                    if (activeScan === this) retry("BLE scan failed: $errorCode")
+                }
+            }
+        }
+        activeScan = scan
+        try {
+            // Non-empty filter permits discovery while the screen is off. The
+            // firmware advertises its config UUID, not its voice service UUID.
+            val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(CONFIG_SERVICE)).build()
+            val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER).build()
+            val scanner = scanner ?: run { retry("Bluetooth scanner unavailable"); return }
+            activeScanner = scanner
+            scanner.startScan(listOf(filter), settings, scan)
+            listener.onStatus("Waiting for Parrot nearby")
+        } catch (_: SecurityException) {
+            retry("Bluetooth permission unavailable")
+        } catch (_: IllegalStateException) {
+            retry("Bluetooth is not ready")
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun connect(device: BluetoothDevice) {
-        close()
-        gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+        if (!running) return
+        listener.onStatus("Connecting to Parrot")
+        try {
+            gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE,
+                BluetoothDevice.PHY_LE_1M_MASK, main)
+            if (gatt == null) retry("Could not connect to Parrot")
+            else main.postDelayed(setupTimeout, 60_000)
+        } catch (_: SecurityException) {
+            retry("Bluetooth permission unavailable")
+        }
+    }
+
+    private fun bleOperation(operation: () -> Boolean) {
+        try {
+            if (!operation()) retry("BLE operation could not start")
+        } catch (_: SecurityException) {
+            retry("Bluetooth permission unavailable")
+        }
+    }
+
+    private fun retry(message: String) {
+        stopScan()
+        clearConnection()
+        listener.onStatus(message)
+        main.removeCallbacks(reconnect)
+        if (running) {
+            main.postDelayed(reconnect, retryDelay)
+            retryDelay = (retryDelay * 2).coerceAtMost(30_000L)
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun stopScan() {
-        scanner?.stopScan(scanCallback)
+        val scan = activeScan ?: return
+        activeScan = null
+        val scanner = activeScanner
+        activeScanner = null
+        try { scanner?.stopScan(scan) } catch (_: SecurityException) {
+        } catch (_: IllegalStateException) { }
     }
 
     @SuppressLint("MissingPermission")
-    fun close() {
+    private fun clearConnection() {
         generation.incrementAndGet()
+        main.removeCallbacks(setupTimeout)
+        main.removeCallbacks(writeTimeout)
         subscribed = false
         voiceBusy = false
         writePending = false
         pendingPlay = null
-        stopScan()
-        gatt?.close()
+        pcm.reset()
+        val oldGatt = gatt
         gatt = null
         rx = null
         tx = null
+        battery = null
+        listener.onBatteryLevel(null)
+        try { oldGatt?.disconnect() } catch (_: SecurityException) { }
+        try { oldGatt?.close() } catch (_: SecurityException) { }
+    }
+
+    fun close() {
+        running = false
+        main.removeCallbacks(reconnect)
+        stopScan()
+        clearConnection()
     }
 
     private fun handlePacket(packet: ByteArray) {
@@ -263,6 +436,11 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
                 return@post
             }
             val config = listener.relayConfig()
+            if (config.apiKey.isBlank()) {
+                writeReply("error:apikey")
+                listener.onStatus("Add a Gemini API key in Settings for AI replies")
+                return@post
+            }
             val timeout = Runnable {
                 if (generation.compareAndSet(job, job + 1)) {
                     writeReply("error:timeout")
@@ -270,9 +448,19 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
             }
             // Firmware gives us 30 seconds. Leave time for the BLE write.
             main.postDelayed(timeout, 25_000)
-            thread(name = "parrot-gemini") {
+            executeRequest {
                 val response = try {
-                    classifier.classify(wav(captured.copyOf(samples * 2), rate), config.apiKey)
+                    val audio = wav(captured.copyOf(samples * 2), rate)
+                    keyFallback.classify(config.apiKey, config.paidApiKey,
+                        isActive = { generation.get() == job && SystemClock.elapsedRealtime() < deadline },
+                        onFallback = {
+                            main.post {
+                                if (generation.get() == job) {
+                                    listener.onStatus("Free Gemini key failed; using paid key for one hour")
+                                }
+                            }
+                        },
+                        request = { key -> classifyRecording(audio, key) })
                 } catch (_: Exception) {
                     // Never expose provider bodies or exception details containing credentials.
                     "error:gemini"
@@ -308,25 +496,21 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
         characteristic.value = "play:$name".toByteArray(Charsets.UTF_8)
         writePending = true
         pendingPlay = name
-        if (!connection.writeCharacteristic(characteristic)) {
-            writePending = false
-            pendingPlay = null
-            listener.onStatus("Could not send play request; try again")
-        } else listener.onStatus("Sending play request: $name")
+        main.postDelayed(writeTimeout, 10_000)
+        listener.onStatus("Sending play request: $name")
+        bleOperation { connection.writeCharacteristic(characteristic) }
     }
 
     @SuppressLint("MissingPermission")
     private fun writeReply(reply: String) {
-        voiceBusy = false
         val characteristic = rx ?: return
         val connection = gatt ?: return
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         characteristic.value = reply.toByteArray(Charsets.UTF_8).let { it.copyOf(minOf(it.size, 63)) }
         writePending = true
-        if (!connection.writeCharacteristic(characteristic)) {
-            writePending = false
-            listener.onStatus("Could not send reply")
-        } else listener.onStatus("Reply sent: ${reply.substringBefore(':')}")
+        main.postDelayed(writeTimeout, 5_000)
+        listener.onStatus("Reply sent: ${reply.substringBefore(':')}")
+        bleOperation { connection.writeCharacteristic(characteristic) }
     }
 
     private fun wav(pcm: ByteArray, rate: Int): ByteArray {
@@ -352,10 +536,13 @@ class VoiceRelay(private val context: Context, private val listener: Listener) {
     private fun signed16(data: ByteArray, offset: Int) = u16(data, offset).toShort().toInt()
 
     companion object {
+        private val CONFIG_SERVICE = UUID.fromString("6b520001-7c8e-4c30-9aa8-45e626d39b01")
         private val VOICE_SERVICE = UUID.fromString("6b520010-7c8e-4c30-9aa8-45e626d39b01")
         private val VOICE_TX = UUID.fromString("6b520011-7c8e-4c30-9aa8-45e626d39b01")
         private val VOICE_RX = UUID.fromString("6b520012-7c8e-4c30-9aa8-45e626d39b01")
         private val CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        private val BATTERY_SERVICE = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
+        private val BATTERY_LEVEL = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
         private val INDEX_TABLE = intArrayOf(-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8)
         private val STEP_TABLE = intArrayOf(7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767)
     }

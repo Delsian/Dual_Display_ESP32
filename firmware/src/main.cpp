@@ -180,6 +180,7 @@ void main_loop() {
   // --- 2. Eye Position Logic ---
   // Update the logical positions of the eyes based on the target
   update_eye_positions(target);
+  const uint8_t eyelid_level = update_eye_blink(current_millis);
 
   // --- 3. Drawing ---
   for (int i = 0; i < NUM_EYES; i++) {
@@ -192,7 +193,7 @@ void main_loop() {
     EyePosition pos = get_eye_position(i);
 
     // Draw the eye at its final calculated position
-    draw_eye_at_target(pos.x, pos.y, 0); // 0 = eyelid open
+    draw_eye_at_target(pos.x, pos.y, eyelid_level);
 
     // Optional: Draw the ToF debug grid on one of the screens
     #if USE_TOF_SENSOR && SHOW_TOF_DEBUG_GRID

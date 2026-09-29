@@ -1,9 +1,12 @@
 # Current project status
 
-Updated: 2026-09-28. Scope: 16 kHz clips regenerated and firmware/filesystem uploaded.
+Updated: 2026-09-29. Scope: synchronized eye blinking added and build-tested.
 
 ## Implemented and build-tested
 
+- Both eyes blink together after random 3–7 s open intervals: 80 ms closing,
+  40 ms closed, 140 ms opening. Timing is nonblocking and rollover-safe.
+  Target firmware build passed; blink upload and hardware validation pending.
 - Added validated manual BLE playback, queued to the voice task with busy and
   connection-generation guards. Existing recording/reply flow is unchanged.
 - Target build and clip host tests passed; Android build and 14 unit tests passed.
@@ -33,17 +36,3 @@ Updated: 2026-09-28. Scope: 16 kHz clips regenerated and firmware/filesystem upl
 - Energy detection can trigger on background sounds; tune `AUDIO_VAD_MIN_RMS`.
 - Worker retired; Android calls Gemini directly. BLE contract is unchanged.
 - Topic generator syntax/catalog parity passed; live Gemini/hardware checks pending.
-
-## Pending work
-- Current voice protocol documented in [BLE.md](BLE.md) on 2026-09-25;
-  finalization and integration validation remain pending. See [handoff](../proposed_changes.md).
-- Firmware flashed; install updated app and check manual play, missing clips, busy commands
-  and disconnect/reconnect. No playback result notification is implemented.
-- Phone/ESP32 validation: pairing, subscription, streaming, disconnect during
-  capture/reply wait, reconnect/resubscribe, clip replies and actual latency.
-- All 60 clips fit: data/ uses 3.18 of 3.38 MB; partition layout unchanged.
-  Filesystem upload applied local audio_volume=75; device reset completed.
-- Verify audible playback speed, interruption and recording after playback.
-- Validate real-audio topic/ignore selection through Android; no Worker deployment needed.
-- GitButler session branch unavailable: checkout reports setup required.
-  Changes remain uncommitted; no branch setup or history changes performed.

@@ -1,46 +1,49 @@
 # Current Android project status
 
-Updated: 2026-09-28. Scope: manual playback of stored ESP32 clips.
+Updated: 2026-09-29. Scope: Parrot battery indicator and Gemini key fallback.
 
 ## Implemented in source
 
-- Settings contains a masked Gemini key field: Add saves/replaces the key in
-  private internal storage (no backup/transfer); startup restores it.
-- Test checks the entered key against the configured Gemini model without saving;
-  access, quota, network and malformed-response failures have separate messages.
-- Main screen adds a clip field and Play; numbers normalize to three digits.
-  Invalid names, unready links and pending voice/write requests are rejected.
-  Bluetooth connection/manual playback no longer requires a Gemini key.
-- Relay scans for Parrot devices, requests MTU 185, subscribes to voice
-  notifications, decodes IMA ADPCM, sends inline PCM WAV directly to Gemini,
-  and writes clip/ignore replies. Worker source and tests were retired.
-- Gemini intent prompt/model and topic/fallback/ignore selection are ported;
-  topic descriptions are generated from the firmware catalog.
-- Invalid/incomplete responses become errors. Local deadline is 25 seconds;
-  cancel/disconnect/new recordings suppress stale replies. HTTP may finish later.
-- Local instructions and project/status summaries define context boundaries;
-  the shared BLE contract remains in the firmware project.
+- Main screen shows Parrot battery percentage from an initial BLE read and live
+  notifications; service caches it across UI rebinding and clears on disconnect.
+  Invalid/missing levels show a dash; battery setup is serialized with voice setup.
+- RelayService owns BLE and AI independently of MainActivity. Start/Stop and
+  notification Stop control persisted enablement; UI binds for status/manual play.
+- connectedDevice foreground service, notification permission request, boot/update
+  receiver and sticky restart support were added. No microphone permission needed.
+- Filtered low-power discovery finds Parrot while the screen is off; disconnects
+  and GATT errors retry with 5–30 s backoff. Setup and write callbacks have timeouts.
+- Bluetooth off pauses connection work; Bluetooth on resumes. Stop clears scans,
+  retry timers, GATT state and in-flight reply generation. Old callbacks are ignored.
+- Separate free/paid keys are read for each request; the previous key remains free.
+  Settings provides masked Save/Test controls for each; empty paid disables fallback.
+- A free-key exception retries the same audio once with paid within the 25 s deadline.
+  Paid is selected for one hour, then free is retried. Paid failures do not extend it.
+  Key changes/service recreation reset to free; cancelled/expired work cannot retry.
+- Missing free keys return a Settings reminder. A bounded wake lock covers requests.
+- Existing BLE packets/replies, Gemini classifier and 25-second deadline retained.
 
 ## Validation and limits
 
-- Passed `:app:assembleDebug` and `:app:testDebugUnitTest` (14 tests).
-- Topic generator syntax and source/Android catalog parity passed.
-- No live Gemini call was made; model access and credentials remain unverified.
-- Manual playback adds a BLE RX command; updated firmware is required.
-  Existing audio packets/replies and clip filenames remain unchanged.
-- Existing Cloudflare deployment was not modified.
-- No physical-device test was performed; hardware verification remains pending.
-- GitButler reports setup required on the current checkout. No session branch
-  was created and no version-control setup or history changes were performed.
+- Gradle 9.6.0 debug build, unit/lifecycle tests and lint passed offline.
+  Battery tests cover reads, modern/legacy notifications, invalid values, voice
+  routing, disconnect/stale callbacks, and cached values after rebinding.
+  Added eight fallback tests (hour boundary, failures, key changes, cancellation),
+  same-audio paid retry simulation, and independent key storage/reload checks.
+- No live Gemini call or physical phone/ESP32 test was performed for this change.
+- Firmware does not retain bonds: reconnect can still require passkey approval.
+  Fully unattended pairing needs a firmware change; this task changes Android only.
+- Reboot/process recovery remains subject to Android/vendor background policy.
+  Force-stop requires reopening the app; multiple Parrots use the first match.
+- BLE contract unchanged; no counterpart firmware change required for the service.
+- GitButler reports setup required; no session branch/commits/history changes made.
 
 ## Pending checks
 
-- Verify manual playback, missing clips, busy/rapid requests and reconnects on device.
-- Verify Settings save/restart/replacement and Test feedback on a physical phone.
-- Validate direct Gemini success, invalid key/quota errors, silence, off-topic speech,
-  cancellation and the reply deadline on a phone.
-- Validate pairing, notification subscription, sustained audio transfer,
-  disconnects during capture/upload, reconnect/resubscribe, clip replies,
-  decoded audio quality, and end-to-end latency on a physical phone and ESP32.
-- For integration tasks, compare against the shared BLE contract and record
-  compatibility findings; firmware summaries may lag Android implementation.
+- Verify initial battery percentage, live changes, disconnect/reconnect and UI reopening on hardware.
+- Verify permission grants/denials, notification Stop, app closure, screen-off
+  recording/AI replies, service/process restart, reboot and Bluetooth toggles.
+- Check out-of-range/reconnect pairing, subscription restoration, stalled GATT,
+  late AI replies, key changes, manual play and vendor battery restrictions.
+- Confirm both Settings fields, real Gemini fallback, hourly return to free,
+  reply latency and key/model/quota behavior on phone/ESP32.

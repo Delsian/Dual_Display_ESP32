@@ -12,6 +12,7 @@
 #ifndef EYE_LOGIC_H
 #define EYE_LOGIC_H
 
+#include <stdint.h>
 #include "tof_sensor.h" // For TofTarget
 
 // State for a single eye's logical position
@@ -28,5 +29,8 @@ void update_eye_positions(const TofTarget& target);
 
 // Gets the current calculated position of a specific eye
 EyePosition get_eye_position(int eye_index);
+
+// Call once per frame; both eyes share the returned level (0=open, 128=closed).
+uint8_t update_eye_blink(uint32_t now_ms);
 
 #endif // EYE_LOGIC_H
