@@ -133,6 +133,17 @@ class GeminiIntentTest {
         }
     }
 
+    @Test fun requestLogErrorsNeverExposeExceptionMessagesOrProviderBodies() {
+        assertEquals("network error", GeminiIntent.failureSummary(java.io.IOException("secret-key")))
+        assertEquals("network timeout", GeminiIntent.failureSummary(java.net.SocketTimeoutException("secret-key")))
+        assertEquals("invalid or incomplete response", GeminiIntent.failureSummary(IllegalStateException("secret-body")))
+        val client = GeminiIntent(File("src/main/assets/intent_topics.json").readText()) {
+            FakeConnection(429, "secret-provider-body")
+        }
+        val error = assertThrows(Exception::class.java) { client.classify(byteArrayOf(1), "secret-key") }
+        assertEquals("HTTP 429", GeminiIntent.failureSummary(error))
+    }
+
     @Test fun keyTestReportsNetworkAndTimeoutFailures() {
         val catalog = File("src/main/assets/intent_topics.json").readText()
         assertTrue(GeminiIntent(catalog) { throw java.net.SocketTimeoutException() }

@@ -1,3 +1,4 @@
+#include "device_log.h"
 #include <Arduino.h>
 #include "config.h"
 #include "speech_test.h"
@@ -41,14 +42,14 @@ void hand_off(SpeechAudio *audio) {
 // Decodes a prerecorded reply from LittleFS and hands it to the audio task.
 bool play_clip(const char *name, uint32_t started) {
   constexpr size_t MAX_CLIP_BYTES = 128 * 1024; // Ample bound for ten seconds of 16 kHz ADPCM plus headers.
-  if (!speech_clip_name_valid(name)) { Serial.println("Speech: invalid clip name."); return false; }
+  if (!speech_clip_name_valid(name)) { DeviceLog.println("Speech: invalid clip name."); return false; }
   char path[32];
   snprintf(path, sizeof(path), "/clips/%s.wav", name);
   const uint32_t load_started = millis();
   File file = LittleFS.open(path, "r");
   const size_t bytes = file ? file.size() : 0;
   if (!bytes || bytes > MAX_CLIP_BYTES) {
-    Serial.printf("Speech: %s missing or too large; upload the filesystem image.\n", path);
+    DeviceLog.printf("Speech: %s missing or too large; upload the filesystem image.\n", path);
     return false;
   }
   std::unique_ptr<uint8_t, void (*)(void *)> wav(
@@ -61,13 +62,13 @@ bool play_clip(const char *name, uint32_t started) {
   if (!audio || !speech_clip_decode(wav.get(), bytes, pcm, frames)) {
     delete audio;
     heap_caps_free(pcm);
-    Serial.printf("Speech: cannot load %s (%s).\n", path, frames ? "memory or decode" : "invalid clip");
+    DeviceLog.printf("Speech: cannot load %s (%s).\n", path, frames ? "memory or decode" : "invalid clip");
     return false;
   }
   audio->bytes.store(frames * 4);
   audio->done.store(true);
   ready.store(audio);
-  Serial.printf("Speech timing: clip=%s, frames=%u, load=%lu ms, total=%lu ms\n", name, unsigned(frames),
+  DeviceLog.printf("Speech timing: clip=%s, frames=%u, load=%lu ms, total=%lu ms\n", name, unsigned(frames),
                 static_cast<unsigned long>(millis() - load_started),
                 static_cast<unsigned long>(millis() - started));
   hand_off(audio);
@@ -150,12 +151,12 @@ class VoiceRxCallbacks : public BLECharacteristicCallbacks {
     if (value.compare(0, 5, "play:") == 0) {
       const std::string name = value.substr(5);
       if (name.find('\0') != std::string::npos || !speech_clip_name_valid(name.c_str())) {
-        Serial.println("Speech: invalid manual clip name.");
+        DeviceLog.println("Speech: invalid manual clip name.");
         return;
       }
       if (!requests || !link_ready()) return;
       if (busy.exchange(true)) {
-        Serial.println("Speech: request already pending; manual play rejected.");
+        DeviceLog.println("Speech: request already pending; manual play rejected.");
         return;
       }
       VoiceRequest request;
@@ -180,7 +181,7 @@ bool reply_to_recording(UploadJob *job) {
     const uint8_t cancel = 0x04;
     if (connected()) send_message(&cancel, 1);
     wait_for_recording(job);
-    Serial.println(message);
+    DeviceLog.println(message);
     return false;
   };
   if (!connected()) return fail("AI: phone not connected; recording not sent.");
@@ -219,7 +220,7 @@ bool reply_to_recording(UploadJob *job) {
   const uint8_t end[] = {0x03, uint8_t(samples), uint8_t(samples >> 8), uint8_t(samples >> 16), uint8_t(samples >> 24)};
   if (!connected() || !send_message(end, sizeof(end))) return fail("AI: phone disconnected.");
   const uint32_t upload_done = millis();
-  Serial.printf("AI timing: upload_tail=%lu ms, audio=%u ms\n",
+  DeviceLog.printf("AI timing: upload_tail=%lu ms, audio=%u ms\n",
                 static_cast<unsigned long>(upload_done - job->stopped), unsigned(samples / 16));
 
   VoiceReply reply;
@@ -228,13 +229,13 @@ bool reply_to_recording(UploadJob *job) {
     received = xQueueReceive(replies, &reply, pdMS_TO_TICKS(100)) == pdTRUE;
   }
   if (!received || !connected()) {
-    Serial.println(connected() ? "AI: no reply from phone." : "AI: phone disconnected before replying.");
+    DeviceLog.println(connected() ? "AI: no reply from phone." : "AI: phone disconnected before replying.");
     return false;
   }
-  Serial.printf("AI timing: reply=%lu ms after upload, total=%lu ms\n",
+  DeviceLog.printf("AI timing: reply=%lu ms after upload, total=%lu ms\n",
                 static_cast<unsigned long>(millis() - upload_done),
                 static_cast<unsigned long>(millis() - job->stopped));
-  Serial.printf("AI reply: %s\n", reply.text);
+  DeviceLog.printf("AI reply: %s\n", reply.text);
   if (strncmp(reply.text, "clip:", 5) == 0) return play_clip(reply.text + 5, job->stopped);
   return false; // "ignore" plays nothing; errors are printed above.
 }
@@ -258,7 +259,7 @@ void init_voice_link(BLEServer *server) {
     if (replies) vQueueDelete(replies);
     if (requests) vQueueDelete(requests);
     replies = requests = nullptr;
-    Serial.println("Voice link: allocation failed; AI requests disabled.");
+    DeviceLog.println("Voice link: allocation failed; AI requests disabled.");
     return;
   }
   BLEService *service = server->createService(VOICE_SERVICE_UUID);
@@ -286,7 +287,7 @@ void request_speech_test(const char *clip) {
   char name[20];
   if (!clip || !*clip) {
     if (!random_clip(name, sizeof(name))) {
-      Serial.println("Speech: no clips in /clips; upload the filesystem image.");
+      DeviceLog.println("Speech: no clips in /clips; upload the filesystem image.");
       return;
     }
   } else {
@@ -295,8 +296,8 @@ void request_speech_test(const char *clip) {
     if (*end == '\0' && id >= 1 && id <= 999) snprintf(name, sizeof(name), "%03ld", id);
     else snprintf(name, sizeof(name), "%s", clip);
   }
-  if (busy.exchange(true)) { Serial.println("Speech: request already pending."); return; }
-  Serial.printf("Speech: local clip %s.\n", name);
+  if (busy.exchange(true)) { DeviceLog.println("Speech: request already pending."); return; }
+  DeviceLog.printf("Speech: local clip %s.\n", name);
   if (!play_clip(name, millis())) busy.store(false);
 }
 
@@ -308,7 +309,7 @@ bool begin_audio_reply(const uint8_t *stereo) {
   static_assert(AUDIO_AI_MIC_CHANNEL <= 1 && AUDIO_AI_MIC_CHANNEL >= 0, "Invalid microphone channel");
   if (!stereo || !requests || !link_ready()) return false;
   const uint32_t generation = link_generation.load();
-  if (busy.exchange(true)) { Serial.println("AI: request already pending; recording not sent."); return false; }
+  if (busy.exchange(true)) { DeviceLog.println("AI: request already pending; recording not sent."); return false; }
   // Busy was clear, so the voice task no longer reads the previous job.
   upload.stereo = stereo;
   upload.bytes.store(0);
@@ -319,7 +320,7 @@ bool begin_audio_reply(const uint8_t *stereo) {
   request.recording = &upload;
   if (xQueueSend(requests, &request, 0) != pdTRUE) {
     busy.store(false);
-    Serial.println("AI: voice queue unavailable.");
+    DeviceLog.println("AI: voice queue unavailable.");
     return false;
   }
   upload_active = true;
@@ -333,7 +334,7 @@ void audio_reply_progress(size_t bytes, bool final) {
   if (!final) return;
   upload.final.store(true);
   upload_active = false;
-  Serial.printf("AI: recorded %u ms; finishing upload.\n", unsigned(bytes / 64));
+  DeviceLog.printf("AI: recorded %u ms; finishing upload.\n", unsigned(bytes / 64));
 }
 
 SpeechAudio *take_speech_audio() {
@@ -356,7 +357,7 @@ void init_voice_link(BLEServer *) {}
 void voice_link_connected() {}
 void voice_link_disconnected() {}
 bool audio_reply_available() { return false; }
-void request_speech_test(const char *) { Serial.println("Speech: audio is unavailable."); }
+void request_speech_test(const char *) { DeviceLog.println("Speech: audio is unavailable."); }
 bool begin_audio_reply(const uint8_t *) { return false; }
 void audio_reply_progress(size_t, bool) {}
 SpeechAudio *take_speech_audio() { return nullptr; }

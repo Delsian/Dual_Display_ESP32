@@ -1,4 +1,4 @@
-# BLE configuration, battery and voice link
+# BLE configuration, battery, logs and voice link
 
 Flash the firmware normally; a filesystem upload is not needed for BLE services.
 Voice replies require the corresponding WAV clips in LittleFS (`/clips/`).
@@ -36,6 +36,55 @@ In nRF Connect, read Battery Level or enable its notifications.
 This uses the existing ADC voltage-based estimate, not an ETA6098 register or
 fuel gauge. It does not report charging status, and the estimate can be affected
 by charging and load.
+
+## Device log service
+
+Added 2026-09-29; build/host-tested, not yet hardware-verified.
+
+Service UUID: `6b520020-7c8e-4c30-9aa8-45e626d39b01`
+
+TX UUID: `6b520021-7c8e-4c30-9aa8-45e626d39b01` (Notify only).
+The service shares the existing GATT server and is discovered after connecting;
+its UUID is not included in advertising. It is available independently of audio.
+Enable TX notifications through its CCCD (`0x2902`, write `01 00`) after encrypted,
+authenticated pairing. Disable with `00 00`. Subscribe again after reconnecting.
+
+Each notification is 5–20 bytes, compatible with the default ATT MTU of 23:
+
+| Offset | Size | Meaning |
+| --- | --- | --- |
+| 0 | 2 | Unsigned little-endian sequence, starting at zero and wrapping at 65535 |
+| 2 | 2 | Unsigned little-endian count of queue-overflow bytes since the previous packet, saturated at 65535 |
+| 4 | 1–16 | Application log text bytes |
+
+Strip the four-byte header and concatenate text bytes in notification order.
+Use an incremental UTF-8 decoder; characters and lines can span notifications.
+Text retains the original serial line endings (`LF` or `CRLF`). A sequence gap
+signals missing notifications; a nonzero overflow count signals dropped source
+bytes, not their exact position in the queued text. Mark a gap and discard partial
+line/decoder state when either occurs. Notifications have no acknowledgement or
+replay, so this is a best-effort diagnostic stream, not an audit log.
+
+Only application output routed through `DeviceLog` is mirrored: audio, AI/voice,
+configuration, display, sensor and command diagnostics. USB serial output remains.
+Pairing passkeys stay serial-only. SDK/library output, ROM boot messages and crash
+dumps are not captured. Logs emitted before subscription are not retained.
+
+The stream uses a 2048-byte queue, dropping new bytes when full, and a background
+task sends at most one packet per 20 ms (up to 800 text bytes/s). Producers only
+enqueue; BLE sends do not run in audio/render tasks. Existing serial writes retain
+their behavior. Disconnecting or writing the CCCD resets queued data and counters.
+Logs from concurrent tasks may interleave, as serial output can.
+
+Client handoff: discover this service, pair, subscribe, decode the header, and show
+the reconstructed text with visible loss markers. Serialize CCCD writes with other
+GATT setup operations. The Android app does not yet subscribe or display logs;
+existing battery and voice clients need no changes to continue working.
+
+Hardware checks: verify unpaired subscriptions are rejected, subscribe after
+pairing, trigger a recording or serial `speech 1`, and compare received text with
+serial. Confirm no passkeys appear, test MTU 23 and 185, disable/re-enable and
+disconnect/reconnect, and check voice streaming/eye responsiveness with logs on.
 
 ## Voice service (Android relay)
 

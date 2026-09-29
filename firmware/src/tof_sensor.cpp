@@ -9,6 +9,7 @@
  * @license See LICENSE.md for details.
  *
  */
+#include "device_log.h"
 #include "tof_sensor.h"
 #include <Wire.h>
 #include <cmath> // For fabsf
@@ -24,14 +25,14 @@ static TofTarget current_target = {0, 0, 0, false, -1, -1, 0}; // The currently 
  * @brief Initializes the VL53L5CX ToF sensor.
  */
 void init_tof_sensor() {
-  Serial.println("Initializing VL53L5CX ToF Sensor...");
+  DeviceLog.println("Initializing VL53L5CX ToF Sensor...");
   Wire.begin(PIN_TOF_SDA, PIN_TOF_SCL);
   // Increase I2C bus speed for faster data transfer.
   // We are switching to 1MHz (1000000Hz) for maximum performance.
   Wire.setClock(1000000); 
 
   if (myImager.begin() == false) {
-    Serial.println("ERROR: VL53L5CX Sensor not found. Rebooting in 3 seconds...");
+    DeviceLog.println("ERROR: VL53L5CX Sensor not found. Rebooting in 3 seconds...");
     delay(3000);
     ESP.restart();
   }
@@ -40,7 +41,7 @@ void init_tof_sensor() {
   myImager.setRangingFrequency(15); // 15 Hz
   myImager.startRanging();
 
-  Serial.println("VL53L5CX Sensor Initialized.");
+  DeviceLog.println("VL53L5CX Sensor Initialized.");
 }
 
 #if TOF_CALIBRATION_MODE
@@ -108,39 +109,39 @@ static void run_calibration_simulation() {
  */
 static void log_measurement_matrix(const VL53L5CX_ResultsData* data) {
     if (!data) {
-        Serial.println("No measurement data to log.");
+        DeviceLog.println("No measurement data to log.");
         return;
     }
 
-    Serial.println("distance_matrix = [");
+    DeviceLog.println("distance_matrix = [");
     for (int y = 0; y < 8; ++y) {
-        Serial.print("  [");
+        DeviceLog.print("  [");
         for (int x = 0; x < 8; ++x) {
             int index = y * 8 + x;
-            Serial.printf("%4d", data->distance_mm[index]);
+            DeviceLog.printf("%4d", data->distance_mm[index]);
             if (x < 7) {
-                Serial.print(", ");
+                DeviceLog.print(", ");
             }
         }
-        Serial.print(y == 7 ? "]" : "],");
-        Serial.println();
+        DeviceLog.print(y == 7 ? "]" : "],");
+        DeviceLog.println();
     }
-    Serial.println("]");
+    DeviceLog.println("]");
 
-    Serial.println("\nstatus_matrix = [");
+    DeviceLog.println("\nstatus_matrix = [");
     for (int y = 0; y < 8; ++y) {
-        Serial.print("  [");
+        DeviceLog.print("  [");
         for (int x = 0; x < 8; ++x) {
             int index = y * 8 + x;
-            Serial.printf("%d", data->target_status[index]);
+            DeviceLog.printf("%d", data->target_status[index]);
             if (x < 7) {
-                Serial.print(", ");
+                DeviceLog.print(", ");
             }
         }
-        Serial.print(y == 7 ? "]" : "],");
-        Serial.println();
+        DeviceLog.print(y == 7 ? "]" : "],");
+        DeviceLog.println();
     }
-    Serial.println("---------------------------------\n");
+    DeviceLog.println("---------------------------------\n");
 }
 
 /**

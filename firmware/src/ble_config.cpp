@@ -8,6 +8,7 @@
 #include "device_config.h"
 #include "drawing_tools.h"
 #include "speech_test.h"
+#include "device_log.h"
 
 namespace {
 constexpr char SERVICE_UUID[] = "6b520001-7c8e-4c30-9aa8-45e626d39b01";
@@ -41,13 +42,14 @@ class SecurityCallbacks : public BLESecurityCallbacks {
   bool onConfirmPIN(uint32_t) override { return false; } // Display-only passkey entry.
   void onAuthenticationComplete(esp_ble_auth_cmpl_t auth) override {
     pairing_visible.store(false);
-    Serial.println(auth.success ? "BLE authenticated." : "BLE authentication failed.");
+    DeviceLog.println(auth.success ? "BLE authenticated." : "BLE authentication failed.");
   }
 };
 
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *) override { voice_link_connected(); }
   void onDisconnect(BLEServer *) override {
+    device_log_disconnected();
     voice_link_disconnected();
     // Pairing is not bonded; each connection must subscribe again.
     battery_notifications->setNotifications(false);
@@ -160,12 +162,13 @@ void init_ble_config(int battery_percentage) {
   battery_level->setValue(&last_battery_level, 1);
   battery->start();
   init_voice_link(server);
+  init_device_log(server);
   auto *advertising = BLEDevice::getAdvertising();
   advertising->addServiceUUID(SERVICE_UUID);
   advertising->addServiceUUID(BLEUUID(uint16_t(0x180F)));
   advertising->setScanResponse(true);
   BLEDevice::startAdvertising();
-  Serial.printf("BLE config ready: %s. Pair using the code shown on the left TFT.\n", name);
+  DeviceLog.printf("BLE config ready: %s. Pair using the code shown on the left TFT.\n", name);
 }
 
 void update_ble_battery(int battery_percentage) {

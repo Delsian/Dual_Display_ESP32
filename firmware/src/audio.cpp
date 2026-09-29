@@ -1,3 +1,4 @@
+#include "device_log.h"
 #include <Arduino.h>
 #include "audio.h"
 #include "config.h"
@@ -39,7 +40,7 @@ bool write_register(uint8_t address, uint8_t reg, uint8_t value) {
   Wire.write(reg);
   Wire.write(value);
   if (Wire.endTransmission() == 0) return true;
-  Serial.printf("Audio: I2C write failed at 0x%02x register 0x%02x\n", address, reg);
+  DeviceLog.printf("Audio: I2C write failed at 0x%02x register 0x%02x\n", address, reg);
   return false;
 }
 
@@ -89,7 +90,7 @@ bool set_audio_rate(uint32_t rate) {
   // discarded during clip playback; restore its 16 kHz clock before capture.
   if (i2s_set_clk(AUDIO_PORT, rate, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO) != ESP_OK ||
       i2s_zero_dma_buffer(AUDIO_PORT) != ESP_OK) {
-    Serial.println("Audio: sample-rate change failed; audio task stopped.");
+    DeviceLog.println("Audio: sample-rate change failed; audio task stopped.");
     return false;
   }
   return true;
@@ -114,7 +115,7 @@ void audio_task(void *) {
                SAMPLE_RATE * AUDIO_VAD_SILENCE_MS / 1000);
 
   auto finish_recording = [&](const char *reason) {
-    Serial.printf("Audio: stopped (%s), %u ms.\n", reason,
+    DeviceLog.printf("Audio: stopped (%s), %u ms.\n", reason,
                   unsigned(recorded * 1000 / (SAMPLE_RATE * FRAME_BYTES)));
     vad.reset();
     pre_write = pre_used = 0;
@@ -135,7 +136,7 @@ void audio_task(void *) {
     size_t received = 0;
     esp_err_t result = i2s_read(AUDIO_PORT, chunk, sizeof(chunk), &received, pdMS_TO_TICKS(20));
     if (result != ESP_OK || received % FRAME_BYTES != 0) {
-      Serial.println("Audio: microphone read failed; audio task stopped.");
+      DeviceLog.println("Audio: microphone read failed; audio task stopped.");
       break;
     }
 
@@ -149,7 +150,7 @@ void audio_task(void *) {
       if (stable_pressed && state != State::Recording) {
         #if AUDIO_AI_REPLY_TEST
         if (!audio_reply_available()) {
-          Serial.println("Audio: waiting for network/request; recording not started.");
+          DeviceLog.println("Audio: waiting for network/request; recording not started.");
           continue;
         }
         #endif
@@ -165,7 +166,7 @@ void audio_task(void *) {
         vad.reset();
         pre_write = pre_used = 0;
         state = State::Recording;
-        Serial.println("Audio: recording.");
+        DeviceLog.println("Audio: recording.");
         #if AUDIO_AI_REPLY_TEST
         begin_audio_reply(record_buffer); // Upload while recording.
         #endif
@@ -182,7 +183,7 @@ void audio_task(void *) {
         if (!set_audio_rate(SPEECH_CLIP_SAMPLE_RATE)) break;
         digitalWrite(PIN_AUDIO_PA, HIGH);
         state = State::Playing;
-        Serial.println("Speech: playing AI voice.");
+        DeviceLog.println("Speech: playing AI voice.");
       }
     }
 
@@ -212,7 +213,7 @@ void audio_task(void *) {
         vad.reset();
         state = State::Recording;
         started_from_voice = true;
-        Serial.println("Audio: voice detected; recording.");
+        DeviceLog.println("Audio: voice detected; recording.");
         #if AUDIO_AI_REPLY_TEST
         if (begin_audio_reply(record_buffer)) audio_reply_progress(recorded, false);
         #endif
@@ -249,7 +250,7 @@ void audio_task(void *) {
       size_t written = 0;
       result = i2s_write(AUDIO_PORT, data, count, &written, pdMS_TO_TICKS(20));
       if (result != ESP_OK || written == 0 || written % FRAME_BYTES != 0) {
-        Serial.println("Audio: speaker write failed; audio task stopped.");
+        DeviceLog.println("Audio: speaker write failed; audio task stopped.");
         break;
       }
       if (state == State::Playing) {
@@ -263,7 +264,7 @@ void audio_task(void *) {
           release_speech_audio(speech);
           speech = nullptr;
           state = State::Idle;
-          Serial.println("Audio: playback complete.");
+          DeviceLog.println("Audio: playback complete.");
         }
       }
     }
@@ -290,7 +291,7 @@ bool init_audio() {
   if (!Wire.begin(PIN_AUDIO_SDA, PIN_AUDIO_SCL) || !Wire.setClock(400000)) return false;
   record_buffer = static_cast<uint8_t *>(heap_caps_malloc(BUFFER_BYTES + PREROLL_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   if (!record_buffer) {
-    Serial.println("Audio: cannot allocate recording buffer in PSRAM.");
+    DeviceLog.println("Audio: cannot allocate recording buffer in PSRAM.");
     return false;
   }
 
@@ -318,19 +319,19 @@ bool init_audio() {
       xTaskCreate(audio_task, "audio", 4096, nullptr, 2, &audio_task_handle) == pdPASS) {
     #if AUDIO_AI_REPLY_TEST
     #if AUDIO_VOICE_ACTIVATION
-    Serial.println("Audio ready: speak to ask AI; KEY1 overrides. Stops on silence or at 5 seconds.");
+    DeviceLog.println("Audio ready: speak to ask AI; KEY1 overrides. Stops on silence or at 5 seconds.");
     #else
-    Serial.println("Audio ready: hold KEY1 to ask AI; release, silence, or time limit ends recording.");
+    DeviceLog.println("Audio ready: hold KEY1 to ask AI; release, silence, or time limit ends recording.");
     #endif
     #else
-    Serial.println("Audio ready: hold KEY1 to record, release to replay.");
+    DeviceLog.println("Audio ready: hold KEY1 to record, release to replay.");
     #endif
     return true;
   }
   if (installed) i2s_driver_uninstall(AUDIO_PORT);
   heap_caps_free(record_buffer);
   record_buffer = nullptr;
-  Serial.println("Audio: initialization failed.");
+  DeviceLog.println("Audio: initialization failed.");
   return false;
 }
 #else

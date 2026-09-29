@@ -132,5 +132,11 @@ internal class GeminiIntent(
 
     companion object {
         const val MODEL = "gemini-3.6-flash"
+        fun failureSummary(error: Exception): String = when (error) {
+            is HttpFailure -> "HTTP ${error.status}"
+            is SocketTimeoutException -> "network timeout"
+            is IOException -> "network error"
+            else -> "invalid or incomplete response"
+        }
     }
 }

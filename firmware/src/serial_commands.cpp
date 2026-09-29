@@ -1,3 +1,4 @@
+#include "device_log.h"
 #include <Arduino.h>
 #include "serial_commands.h"
 #include "speech_test.h"
@@ -7,7 +8,7 @@ void serial_task(void *) {
   char command[16] = {};
   size_t command_length = 0;
   bool command_overflow = false;
-  Serial.println("Send speech [N|off_K] followed by Enter to play a local clip (random if omitted).");
+  DeviceLog.println("Send speech [N|off_K] followed by Enter to play a local clip (random if omitted).");
 
   for (;;) {
     // Bound serial work so a continuous input stream still yields to other tasks.
@@ -36,6 +37,6 @@ void serial_task(void *) {
 void init_serial_commands() {
   // Clip decoding must not block the animation task.
   if (xTaskCreate(serial_task, "serial_commands", 8192, nullptr, 1, nullptr) != pdPASS) {
-    Serial.println("Serial command task allocation failed.");
+    DeviceLog.println("Serial command task allocation failed.");
   }
 }

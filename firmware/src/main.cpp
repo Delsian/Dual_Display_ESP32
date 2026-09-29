@@ -10,6 +10,7 @@
  *
  */
 
+#include "device_log.h"
 #include <Arduino.h>
 #include "config.h"
 // #include "esp32-hal-log.h" // Disabled for debugging
@@ -84,7 +85,7 @@ void setup() {
     delay(100);
   }
 
-  Serial.println("Booting " PROJECT_NAME " Firmware...");
+  DeviceLog.println("Booting " PROJECT_NAME " Firmware...");
   Serial.flush(); // Flush outgoing data
   // Initialize the LED pin as an output
   #if LED_PIN >= 0
@@ -94,7 +95,7 @@ void setup() {
 
   // Preserve configuration and assets if mounting fails; never auto-format.
   if (!LittleFS.begin(false)) {
-    Serial.println("FATAL: LittleFS mount failed. Upload filesystem image. Halting.");
+    DeviceLog.println("FATAL: LittleFS mount failed. Upload filesystem image. Halting.");
     Serial.flush();
     // If even formatting fails, there is a hardware or configuration problem.
     while (1) {
@@ -128,14 +129,14 @@ void setup() {
 
   #if USE_AUDIO
     if (!init_audio()) {
-      Serial.println("Audio unavailable; continuing without recording/playback.");
+      DeviceLog.println("Audio unavailable; continuing without recording/playback.");
     }
   #endif
 
   init_serial_commands();
   init_ble_config(get_battery_percentage());
 
-  Serial.println("Initialization complete. Starting main loop.");
+  DeviceLog.println("Initialization complete. Starting main loop.");
   Serial.flush();
 }
 

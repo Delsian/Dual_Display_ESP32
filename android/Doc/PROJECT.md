@@ -31,6 +31,10 @@ firmware internals belong to the sibling project.
   firmware `backend/topics.json`; rebuild Android after topic changes.
 - [GeminiKeyFallback.kt](../app/src/main/java/com/eugkrashtan/parrot/GeminiKeyFallback.kt):
   retries free-key failures once with paid, then retries free after one hour.
+- [DeviceLogDecoder.kt](../app/src/main/java/com/eugkrashtan/parrot/DeviceLogDecoder.kt):
+  reassembles bounded UTF-8 lines and marks gaps from the firmware log endpoint.
+  Service retains 32K characters; common Logs offers Follow/Clear with dark-blue
+  device and black app entries, plus free/paid AI call counters and safe request logs.
 - [App configuration](../app/build.gradle.kts): Kotlin Android app, minimum
   SDK 31 (Android 12), compile/target SDK 35, Java/Kotlin target 17.
 - [Manifest](../app/src/main/AndroidManifest.xml): Bluetooth scan/connect and

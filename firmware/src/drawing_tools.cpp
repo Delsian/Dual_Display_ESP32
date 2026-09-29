@@ -9,6 +9,7 @@
  * @license See LICENSE.md for details.
  *
  */
+#include "device_log.h"
 #include "drawing_tools.h"
 #include <Arduino.h>
 
@@ -44,35 +45,35 @@ void pushSpriteToFb(TFT_eSprite* sprite, int32_t x, int32_t y, uint16_t* framebu
  */
 void log_tft_setup() {
   // Log the pins that TFT_eSPI is configured to use, to verify build flags
-  Serial.println("TFT_eSPI pins from build flags:");
-  Serial.printf("  MOSI: %d, SCLK: %d, DC: %d, RST: %d, CS: %d\n",
+  DeviceLog.println("TFT_eSPI pins from build flags:");
+  DeviceLog.printf("  MOSI: %d, SCLK: %d, DC: %d, RST: %d, CS: %d\n",
                 TFT_MOSI, TFT_SCLK, TFT_DC, TFT_RST, TFT_CS);
 
   // Get a diagnostic report from the library to confirm all settings
-  Serial.println("\n--- TFT_eSPI Setup Report ---");
+  DeviceLog.println("\n--- TFT_eSPI Setup Report ---");
   setup_t tft_settings;
   tft.getSetup(tft_settings);
 
-  Serial.printf("TFT_eSPI Ver: %s\n", tft_settings.version.c_str());
-  Serial.printf("Processor:    %d\n", tft_settings.esp);
-  Serial.printf("Transactions: %s\n", tft_settings.trans ? "Yes" : "No");
-  Serial.printf("Interface:    %s\n", tft_settings.serial ? "SPI" : "Parallel");
+  DeviceLog.printf("TFT_eSPI Ver: %s\n", tft_settings.version.c_str());
+  DeviceLog.printf("Processor:    %d\n", tft_settings.esp);
+  DeviceLog.printf("Transactions: %s\n", tft_settings.trans ? "Yes" : "No");
+  DeviceLog.printf("Interface:    %s\n", tft_settings.serial ? "SPI" : "Parallel");
   if (tft_settings.serial) {
-    Serial.printf("SPI overlap:  %s\n", tft_settings.overlap ? "Yes" : "No");
+    DeviceLog.printf("SPI overlap:  %s\n", tft_settings.overlap ? "Yes" : "No");
   }
 
-  Serial.printf("Driver:       %d\n", tft_settings.tft_driver);
-  Serial.printf("Resolution:   %d x %d\n", tft_settings.tft_width, tft_settings.tft_height);
+  DeviceLog.printf("Driver:       %d\n", tft_settings.tft_driver);
+  DeviceLog.printf("Resolution:   %d x %d\n", tft_settings.tft_width, tft_settings.tft_height);
 
   if (tft_settings.serial) {
-    Serial.printf("SPI Freq:     %.2f MHz\n", tft_settings.tft_spi_freq / 10.0);
-    if (tft_settings.tft_rd_freq > 0) Serial.printf("Read Freq:    %.2f MHz\n", tft_settings.tft_rd_freq / 10.0);
+    DeviceLog.printf("SPI Freq:     %.2f MHz\n", tft_settings.tft_spi_freq / 10.0);
+    if (tft_settings.tft_rd_freq > 0) DeviceLog.printf("Read Freq:    %.2f MHz\n", tft_settings.tft_rd_freq / 10.0);
   }
 
-  Serial.printf("TFT_MOSI: %d, TFT_MISO: %d, TFT_SCLK: %d, TFT_CS: %d, TFT_DC: %d, TFT_RST: %d\n",
+  DeviceLog.printf("TFT_MOSI: %d, TFT_MISO: %d, TFT_SCLK: %d, TFT_CS: %d, TFT_DC: %d, TFT_RST: %d\n",
                 tft_settings.pin_tft_mosi, tft_settings.pin_tft_miso, tft_settings.pin_tft_clk,
                 tft_settings.pin_tft_cs, tft_settings.pin_tft_dc, tft_settings.pin_tft_rst);
-  Serial.println("---------------------------------");
+  DeviceLog.println("---------------------------------");
 }
 
 
@@ -191,8 +192,8 @@ void precalculate_scanlines() {
 bool load_specific_eye_image(const char* filename, int16_t width, int16_t height, uint16_t** buffer) {
     fs::File file = LittleFS.open(filename, "r");
     if (!file) {
-        Serial.print("Failed to open file for reading: ");
-        Serial.println(filename);
+        DeviceLog.print("Failed to open file for reading: ");
+        DeviceLog.println(filename);
         return false;
     }
     
@@ -200,7 +201,7 @@ bool load_specific_eye_image(const char* filename, int16_t width, int16_t height
     size_t expected_size = width * height * sizeof(uint16_t);
     
     if (file_size != expected_size) {
-        Serial.printf("File size mismatch! Expected %d, got %d\n", expected_size, file_size);
+        DeviceLog.printf("File size mismatch! Expected %d, got %d\n", expected_size, file_size);
         file.close();
         return false;
     }
@@ -209,11 +210,11 @@ bool load_specific_eye_image(const char* filename, int16_t width, int16_t height
     *buffer = (uint16_t*)ps_malloc(file_size);
     if (!*buffer) {
         // If PSRAM allocation fails, try internal RAM as a fallback.
-        Serial.println("ps_malloc failed, trying malloc...");
+        DeviceLog.println("ps_malloc failed, trying malloc...");
         *buffer = (uint16_t*)malloc(file_size);
     }
     if (!*buffer) { // If both allocations fail, report the error.
-        Serial.printf("Failed to allocate memory for eye image buffer: %s\n", filename);
+        DeviceLog.printf("Failed to allocate memory for eye image buffer: %s\n", filename);
         file.close();
         return false;
     }
@@ -221,7 +222,7 @@ bool load_specific_eye_image(const char* filename, int16_t width, int16_t height
     file.read((uint8_t*)*buffer, file_size);
     file.close();
     
-    Serial.printf("Image '%s' loaded successfully into RAM.\n", filename);
+    DeviceLog.printf("Image '%s' loaded successfully into RAM.\n", filename);
     return true;
 }
 
@@ -259,13 +260,13 @@ void init_tft() {
   for (int i = 0; i < NUM_EYES; i++) {
     framebuffers[i] = (uint16_t*)ps_malloc(SCR_WD * SCR_HT * sizeof(uint16_t));
     if (framebuffers[i] == nullptr) {
-      Serial.printf("FATAL: Failed to allocate framebuffer %d in PSRAM\n", i);
+      DeviceLog.printf("FATAL: Failed to allocate framebuffer %d in PSRAM\n", i);
       while(1); // Halt
     }
-    Serial.printf("Framebuffer %d allocated in PSRAM\n", i);
+    DeviceLog.printf("Framebuffer %d allocated in PSRAM\n", i);
   }
 
-  Serial.print("init tft ");
+  DeviceLog.print("init tft ");
   screens[EYE_LEFT].CS = PIN_CS1;
   screens[EYE_RIGHT].CS = PIN_CS2;
   pinMode(screens[EYE_LEFT].CS, OUTPUT);
@@ -288,7 +289,7 @@ void init_tft() {
     digitalWrite(reset_pins[i], HIGH);
     delay(150);
 
-    Serial.printf("LCD%d: CS=%d RESET=%d BL=%d; sending initialization\n",
+    DeviceLog.printf("LCD%d: CS=%d RESET=%d BL=%d; sending initialization\n",
                   i + 1, screens[i].CS, reset_pins[i], backlight_pins[i]);
     select_screen(i);
     // TFT_RST=-1 makes the library software-reset only the selected panel.
@@ -312,7 +313,7 @@ void init_tft() {
   log_tft_setup(); // Log the configuration details
 
   
-  Serial.print("call tft.init ");
+  DeviceLog.print("call tft.init ");
 #ifdef TFT_RST_R
   // The DualEye board has a separate reset line for the second display.
   pinMode(TFT_RST_R, OUTPUT);
@@ -328,7 +329,7 @@ void init_tft() {
   pinMode(TFT_BL_R, OUTPUT);
   digitalWrite(TFT_BL_R, TFT_BACKLIGHT_ON);
 #endif
-  Serial.print("call setRotation ");
+  DeviceLog.print("call setRotation ");
   tft.setRotation(0); // Set rotation to 0 degrees to correct inverted display
 #endif
   

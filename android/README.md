@@ -73,6 +73,34 @@ This uses Android's [connected-device foreground service guidance](https://devel
 Verify screen-off audio, pairing, out-of-range recovery, Bluetooth toggles, reboot,
 notification Stop, and battery restrictions on your phone before relying on it.
 
+## App and device logs
+
+Press **Logs** to open the common live, selectable log window. Device text is dark
+blue and app events are black on a white background. **Follow new logs**
+keeps the newest lines visible; turn it off to inspect earlier output. **Clear**
+removes the app's current log history without changing the device or subscription.
+
+AI counters show total Gemini classification calls, free/paid calls, succeeded,
+failed and pending calls. A fallback retry counts as a separate call. Logs include
+call ID, key tier, audio duration, result or safe failure category (including HTTP
+status), and elapsed time. Late/cancelled results are marked as not delivered.
+Counters measure API-call outcomes, not device playback; key tests in Settings are
+excluded. Clear preserves counters; service destruction resets them. API keys,
+provider response bodies and recorded audio are never added to app request logs.
+
+App connection/status and AI events appear alongside device logs. The running relay
+automatically subscribes to the authenticated firmware log service
+after pairing. The service retains up to 32K characters in memory while the window
+is closed; older lines are removed. History is lost when the service is destroyed.
+Only complete lines are displayed, with a 4096-byte limit per line. UTF-8 characters
+and lines are reassembled across notifications. Packet loss and firmware overflow
+produce visible gap markers; damaged partial lines are discarded.
+
+Install firmware with the [device log endpoint](../firmware/Doc/BLE.md#device-log-service).
+Older firmware shows a logs-unavailable message while voice operation continues.
+Reconnects reset decoding and resubscribe; the window marks connection boundaries.
+Pairing passkeys, ROM boot output, SDK logs and crash dumps are not included.
+
 ## Play a stored ESP32 clip
 
 Start the background relay and wait for **Ready**, enter a clip number or name (for example `1`,

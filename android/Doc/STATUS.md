@@ -1,49 +1,48 @@
 # Current Android project status
 
-Updated: 2026-09-29. Scope: Parrot battery indicator and Gemini key fallback.
+Updated: 2026-09-29. Scope: common device/app logs and AI request counters.
 
 ## Implemented in source
 
-- Main screen shows Parrot battery percentage from an initial BLE read and live
-  notifications; service caches it across UI rebinding and clears on disconnect.
-  Invalid/missing levels show a dash; battery setup is serialized with voice setup.
-- RelayService owns BLE and AI independently of MainActivity. Start/Stop and
-  notification Stop control persisted enablement; UI binds for status/manual play.
-- connectedDevice foreground service, notification permission request, boot/update
-  receiver and sticky restart support were added. No microphone permission needed.
-- Filtered low-power discovery finds Parrot while the screen is off; disconnects
-  and GATT errors retry with 5–30 s backoff. Setup and write callbacks have timeouts.
-- Bluetooth off pauses connection work; Bluetooth on resumes. Stop clears scans,
-  retry timers, GATT state and in-flight reply generation. Old callbacks are ignored.
-- Separate free/paid keys are read for each request; the previous key remains free.
-  Settings provides masked Save/Test controls for each; empty paid disables fallback.
-- A free-key exception retries the same audio once with paid within the 25 s deadline.
-  Paid is selected for one hour, then free is retried. Paid failures do not extend it.
-  Key changes/service recreation reset to free; cancelled/expired work cannot retry.
-- Missing free keys return a Settings reminder. A bounded wake lock covers requests.
-- Existing BLE packets/replies, Gemini classifier and 25-second deadline retained.
+- Common Logs shows device text dark blue and app text black, with Follow/Clear.
+  AI counters track total/free/paid/succeeded/failed/pending classification calls;
+  request logs show IDs, durations, results/safe errors. Clear preserves counters.
+  Relay service
+  retains 32K characters in memory across window/activity closure; no disk logging.
+- Authenticated log subscription is serialized with battery/voice setup. Decoder
+  reassembles bounded UTF-8 lines, marks packet/overflow loss and resets on reconnect.
+  Missing log service leaves voice working; stale GATT callbacks are ignored.
+- Main screen shows battery percentage from BLE read/notifications; service
+  caches it across UI rebinding and clears on disconnect. Invalid values show a dash.
+- RelayService owns BLE/AI independently of MainActivity. Start/Stop and notification
+  Stop control persisted enablement; boot/update and sticky restart are supported.
+- Low-power discovery and 5–30 s reconnect backoff handle disconnect/Bluetooth changes;
+  setup/write timeouts and generation guards protect requests from stale callbacks.
+- Separate free/paid keys have masked Save/Test controls. Free failures retry once
+  with paid within the shared 25 s deadline; paid is used for one hour before free
+  is retried. Key changes/service recreation reset selection; empty paid disables it.
+- Bounded wake lock covers voice requests. Manual stored-clip playback remains available.
 
 ## Validation and limits
 
-- Gradle 9.6.0 debug build, unit/lifecycle tests and lint passed offline.
-  Battery tests cover reads, modern/legacy notifications, invalid values, voice
-  routing, disconnect/stale callbacks, and cached values after rebinding.
-  Added eight fallback tests (hour boundary, failures, key changes, cancellation),
-  same-audio paid retry simulation, and independent key storage/reload checks.
+- Gradle 9.6.0 unit/lifecycle tests, debug APK build and lint passed offline.
+- Log tests cover UTF-8/line fragmentation, gaps/overflow, malformed/oversized data,
+  sequence wrap/reset, modern/legacy callbacks, voice routing, stale connections,
+  history limits, rebinding and Clear. Battery, fallback and prior lifecycle tests pass.
+  Common-log tests cover source colors, counters, retry events and safe error summaries.
 - No live Gemini call or physical phone/ESP32 test was performed for this change.
-- Firmware does not retain bonds: reconnect can still require passkey approval.
-  Fully unattended pairing needs a firmware change; this task changes Android only.
-- Reboot/process recovery remains subject to Android/vendor background policy.
-  Force-stop requires reopening the app; multiple Parrots use the first match.
-- BLE contract unchanged; no counterpart firmware change required for the service.
+- Logs require firmware with the device log endpoint; see the shared BLE contract.
+  No protocol changes were needed in this Android task. Firmware upload is pending.
+- Firmware does not retain bonds: reconnect may require passkey approval.
+- Restart remains subject to Android/vendor policy; force-stop requires reopening.
+  Multiple Parrots use the first match. Log history is lost on service destruction.
 - GitButler reports setup required; no session branch/commits/history changes made.
 
 ## Pending checks
 
-- Verify initial battery percentage, live changes, disconnect/reconnect and UI reopening on hardware.
-- Verify permission grants/denials, notification Stop, app closure, screen-off
+- Install firmware/app and verify colors/counters, pairing, log subscription, Follow/Clear,
+  reconnect boundaries, unavailable firmware, and concurrent logs/audio/animation.
+- Verify battery updates, permissions, notification Stop, activity closure, screen-off
   recording/AI replies, service/process restart, reboot and Bluetooth toggles.
-- Check out-of-range/reconnect pairing, subscription restoration, stalled GATT,
-  late AI replies, key changes, manual play and vendor battery restrictions.
-- Confirm both Settings fields, real Gemini fallback, hourly return to free,
-  reply latency and key/model/quota behavior on phone/ESP32.
+- Check stalled GATT, late replies, key changes, manual play and battery restrictions.
+- Confirm real Gemini fallback, hourly return to free, reply latency and quota behavior.

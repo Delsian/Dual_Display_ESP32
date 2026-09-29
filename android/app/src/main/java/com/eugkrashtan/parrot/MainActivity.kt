@@ -29,6 +29,7 @@ class MainActivity : Activity() {
             relay = service as RelayService.LocalBinder
             relay?.observe { onStatus(it) }
             relay?.observeBattery { onBatteryLevel(it) }
+            relay?.observeLogs(logViewUpdater)
         }
         override fun onServiceDisconnected(name: ComponentName) {
             relay = null
@@ -38,6 +39,8 @@ class MainActivity : Activity() {
     }
     private lateinit var keyStore: ApiKeyStore
     private var settingsDialog: AlertDialog? = null
+    private var logDialog: AlertDialog? = null
+    private var logViewUpdater: ((CharSequence) -> Unit)? = null
     private var config = VoiceRelay.Config("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,7 +90,11 @@ class MainActivity : Activity() {
         root.addView(disconnect, buttonParams())
         root.addView(clip, buttonParams())
         root.addView(play, buttonParams())
-        setContentView(root)
+        root.addView(Button(this).apply {
+            text = "Logs"
+            setOnClickListener { showDeviceLogs() }
+        }, buttonParams())
+        setContentView(android.widget.ScrollView(this).apply { addView(root) })
     }
 
     override fun onStart() {
@@ -99,6 +106,7 @@ class MainActivity : Activity() {
     override fun onStop() {
         relay?.observe(null)
         relay?.observeBattery(null)
+        relay?.observeLogs(null)
         onBatteryLevel(null)
         relay = null
         if (bound) unbindService(connection)
@@ -129,6 +137,58 @@ class MainActivity : Activity() {
     private fun startRelay() {
         try { RelayService.start(this) }
         catch (_: RuntimeException) { showMessage("Could not start background relay; try again") }
+    }
+
+    private fun showDeviceLogs() {
+        if (logDialog?.isShowing == true) return
+        val text = TextView(this).apply {
+            setTextColor(android.graphics.Color.BLACK)
+            setBackgroundColor(android.graphics.Color.WHITE)
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 12f
+            setTextIsSelectable(true)
+            setPadding(16, 8, 16, 8)
+        }
+        val scroll = android.widget.ScrollView(this).apply { addView(text) }
+        val counters = TextView(this).apply { setTextColor(android.graphics.Color.BLACK) }
+        val follow = android.widget.CheckBox(this).apply {
+            this.text = "Follow new logs"
+            setTextColor(android.graphics.Color.BLACK)
+            isChecked = true
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(android.graphics.Color.WHITE)
+            addView(counters)
+            addView(follow)
+            addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                (resources.displayMetrics.heightPixels * 0.5f).toInt()))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Logs — device: blue · app: black")
+            .setView(content)
+            .setNeutralButton("Clear", null)
+            .setNegativeButton("Close", null)
+            .create()
+        logDialog = dialog
+        logViewUpdater = { history ->
+            runOnUiThread {
+                text.text = history.ifEmpty { "No logs yet. Start the relay and connect to Parrot." }
+                counters.text = relay?.aiCounters() ?: "AI counters unavailable; waiting for relay service"
+                if (follow.isChecked) scroll.post { scroll.fullScroll(android.view.View.FOCUS_DOWN) }
+            }
+        }
+        dialog.setOnDismissListener {
+            relay?.observeLogs(null)
+            logViewUpdater = null
+            logDialog = null
+        }
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            relay?.clearLogs()
+        }
+        logViewUpdater?.invoke("")
+        relay?.observeLogs(logViewUpdater)
     }
 
     private fun showSettings() {
@@ -240,6 +300,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         settingsDialog?.dismiss()
+        logDialog?.dismiss()
         super.onDestroy()
     }
 }

@@ -29,8 +29,26 @@ class RelayService : Service(), VoiceRelay.Listener {
     private var observer: ((String) -> Unit)? = null
     private var batteryLevel: Int? = null
     private var batteryObserver: ((Int?) -> Unit)? = null
+    private val logHistory = android.text.SpannableStringBuilder()
+    private var logObserver: ((CharSequence) -> Unit)? = null
+    private var freeCalls = 0L
+    private var paidCalls = 0L
+    private var successfulCalls = 0L
+    private var failedCalls = 0L
+    private val logHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val publishLogs = Runnable { logObserver?.invoke(android.text.SpannedString(logHistory)) }
 
     inner class LocalBinder : Binder() {
+        fun aiCounters(): String = "AI calls: ${freeCalls + paidCalls} · Free: $freeCalls · Paid: $paidCalls\n" +
+            "Succeeded: $successfulCalls · Failed: $failedCalls · Pending: ${freeCalls + paidCalls - successfulCalls - failedCalls}"
+        fun observeLogs(listener: ((CharSequence) -> Unit)?) {
+            logObserver = listener
+            listener?.invoke(android.text.SpannedString(logHistory))
+        }
+        fun clearLogs() {
+            logHistory.clear()
+            logObserver?.invoke("")
+        }
         fun observeBattery(listener: ((Int?) -> Unit)?) {
             batteryObserver = listener
             listener?.invoke(batteryLevel)
@@ -114,6 +132,7 @@ class RelayService : Service(), VoiceRelay.Listener {
     )
 
     override fun onStatus(message: String) {
+        if (message != status) appendLog("[App] $message\n", android.graphics.Color.BLACK)
         status = message
         observer?.invoke(message)
         if (foreground) getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
@@ -127,6 +146,34 @@ class RelayService : Service(), VoiceRelay.Listener {
     override fun onBatteryLevel(level: Int?) {
         batteryLevel = level
         batteryObserver?.invoke(level)
+    }
+
+    override fun onDeviceLog(text: String) {
+        appendLog(text, android.graphics.Color.rgb(0, 0, 139))
+    }
+
+    override fun onAiCallStarted(id: Long, paid: Boolean, audioMs: Int) {
+        if (paid) paidCalls++ else freeCalls++
+        appendLog("[App] AI #$id request: ${if (paid) "paid" else "free"} key, ${audioMs} ms audio\n",
+            android.graphics.Color.BLACK)
+    }
+
+    override fun onAiCallFinished(id: Long, success: Boolean, outcome: String, elapsedMs: Long, stale: Boolean) {
+        if (success) successfulCalls++ else failedCalls++
+        appendLog("[App] AI #$id ${if (success) "succeeded" else "failed"}: $outcome; ${elapsedMs} ms" +
+            (if (stale) " (late/cancelled; not delivered)" else "") + "\n", android.graphics.Color.BLACK)
+    }
+
+    private fun appendLog(text: String, color: Int) {
+        val start = logHistory.length
+        logHistory.append(text)
+        logHistory.setSpan(android.text.style.ForegroundColorSpan(color), start, logHistory.length,
+            android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        if (logHistory.length > 32768) {
+            val cutoff = logHistory.indexOf("\n", logHistory.length - 32768)
+            logHistory.delete(0, if (cutoff >= 0) cutoff + 1 else logHistory.length - 32768)
+        }
+        if (logObserver != null && !logHandler.hasCallbacks(publishLogs)) logHandler.postDelayed(publishLogs, 100)
     }
 
     private fun notification(): Notification {
@@ -148,6 +195,8 @@ class RelayService : Service(), VoiceRelay.Listener {
         foreground = false
         observer = null
         batteryObserver = null
+        logObserver = null
+        logHandler.removeCallbacks(publishLogs)
         relay.close()
         unregisterReceiver(bluetoothState)
         super.onDestroy()

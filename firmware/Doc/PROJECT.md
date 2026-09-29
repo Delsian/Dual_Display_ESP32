@@ -16,6 +16,8 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
 - Arduino/PlatformIO firmware; environment `esp32-s3-dualeye-touch-lcd-1_28`.
 - [Audio task](../src/audio.cpp): ES7210 microphone and ES8311 speaker over I2S,
   16 kHz stereo capture, PSRAM recording buffer, KEY1 and automatic activation.
+- [Device logs](../src/device_log.cpp): application output mirrors to serial and an
+  authenticated, bounded BLE notification stream; protocol and client handoff in [BLE.md](BLE.md).
 - [Sound detector](../src/audio_vad.cpp): adaptive energy threshold on the
   selected microphone channel; not a wake-word or semantic speech detector.
 - [Voice task](../src/speech_test.cpp): BLE recordings to a native Android relay

@@ -40,11 +40,15 @@ class VoiceRelay(
         fun onStatus(message: String)
         fun onRequestActive(active: Boolean) {}
         fun onBatteryLevel(level: Int?) {}
+        fun onDeviceLog(text: String) {}
+        fun onAiCallStarted(id: Long, paid: Boolean, audioMs: Int) {}
+        fun onAiCallFinished(id: Long, success: Boolean, outcome: String, elapsedMs: Long, stale: Boolean) {}
     }
 
     data class Config(val apiKey: String, val paidApiKey: String = "")
 
     private val generation = AtomicLong()
+    private val aiCallSequence = AtomicLong()
     private val keyFallback = GeminiKeyFallback { SystemClock.elapsedRealtime() }
 
     private val adapter = BluetoothAdapter.getDefaultAdapter()
@@ -54,6 +58,8 @@ class VoiceRelay(
     private var rx: BluetoothGattCharacteristic? = null
     private var tx: BluetoothGattCharacteristic? = null
     private var battery: BluetoothGattCharacteristic? = null
+    private var logs: BluetoothGattCharacteristic? = null
+    private val logDecoder = DeviceLogDecoder()
     private var pcm = ByteArrayOutputStream()
     private var expectedSamples = 0
     private var sampleRate = 16000
@@ -109,6 +115,7 @@ class VoiceRelay(
                 return
             }
             battery = gatt.getService(BATTERY_SERVICE)?.getCharacteristic(BATTERY_LEVEL)
+            logs = gatt.getService(LOG_SERVICE)?.getCharacteristic(LOG_TX)
             val level = battery
             bleOperation {
                 if (level != null && gatt.readCharacteristic(level)) true
@@ -134,7 +141,7 @@ class VoiceRelay(
                     descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                     if (gatt.writeDescriptor(descriptor)) return@bleOperation true
                 }
-                subscribeVoice(gatt)
+                subscribeLogs(gatt)
                 true
             }
         }
@@ -153,6 +160,12 @@ class VoiceRelay(
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             if (!running || this@VoiceRelay.gatt !== gatt || descriptor.uuid != CCCD) return
             if (descriptor.characteristic === battery) {
+                subscribeLogs(gatt)
+                return
+            }
+            if (descriptor.characteristic === logs) {
+                listener.onDeviceLog(if (status == BluetoothGatt.GATT_SUCCESS)
+                    "[Device log stream connected]\n" else "[Device log subscription failed]\n")
                 subscribeVoice(gatt)
                 return
             }
@@ -204,6 +217,23 @@ class VoiceRelay(
     }
 
     @SuppressLint("MissingPermission")
+    private fun subscribeLogs(connection: BluetoothGatt) {
+        logDecoder.reset()
+        bleOperation {
+            val characteristic = logs
+            val descriptor = characteristic?.getDescriptor(CCCD)
+            if (characteristic != null && descriptor != null &&
+                connection.setCharacteristicNotification(characteristic, true)) {
+                descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                if (connection.writeDescriptor(descriptor)) return@bleOperation true
+            }
+            listener.onDeviceLog("[Device logs unavailable; firmware log endpoint required]\n")
+            subscribeVoice(connection)
+            true
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     private fun subscribeVoice(connection: BluetoothGatt) {
         val characteristic = tx ?: return
         val descriptor = characteristic.getDescriptor(CCCD) ?: run {
@@ -232,6 +262,7 @@ class VoiceRelay(
             if (!running || gatt !== connection) return@post
             when (characteristic) {
                 battery -> updateBattery(packet)
+                logs -> logDecoder.accept(packet).takeIf { it.isNotEmpty() }?.let(listener::onDeviceLog)
                 tx -> handlePacket(packet)
             }
         }
@@ -352,6 +383,9 @@ class VoiceRelay(
         rx = null
         tx = null
         battery = null
+        if (logs != null) listener.onDeviceLog("[Device log stream disconnected]\n")
+        logs = null
+        logDecoder.reset()
         listener.onBatteryLevel(null)
         try { oldGatt?.disconnect() } catch (_: SecurityException) { }
         try { oldGatt?.close() } catch (_: SecurityException) { }
@@ -460,7 +494,25 @@ class VoiceRelay(
                                 }
                             }
                         },
-                        request = { key -> classifyRecording(audio, key) })
+                        request = { key ->
+                            val id = aiCallSequence.incrementAndGet()
+                            val started = SystemClock.elapsedRealtime()
+                            val paid = key != config.apiKey && key == config.paidApiKey
+                            main.post { listener.onAiCallStarted(id, paid, samples * 1000 / rate) }
+                            try {
+                                val result = classifyRecording(audio, key)
+                                val elapsed = SystemClock.elapsedRealtime() - started
+                                val stale = generation.get() != job || SystemClock.elapsedRealtime() >= deadline
+                                main.post { listener.onAiCallFinished(id, true, result, elapsed, stale) }
+                                result
+                            } catch (error: Exception) {
+                                val elapsed = SystemClock.elapsedRealtime() - started
+                                val stale = generation.get() != job || SystemClock.elapsedRealtime() >= deadline
+                                val reason = GeminiIntent.failureSummary(error)
+                                main.post { listener.onAiCallFinished(id, false, reason, elapsed, stale) }
+                                throw error
+                            }
+                        })
                 } catch (_: Exception) {
                     // Never expose provider bodies or exception details containing credentials.
                     "error:gemini"
@@ -543,6 +595,8 @@ class VoiceRelay(
         private val CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private val BATTERY_SERVICE = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
         private val BATTERY_LEVEL = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
+        private val LOG_SERVICE = UUID.fromString("6b520020-7c8e-4c30-9aa8-45e626d39b01")
+        private val LOG_TX = UUID.fromString("6b520021-7c8e-4c30-9aa8-45e626d39b01")
         private val INDEX_TABLE = intArrayOf(-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8)
         private val STEP_TABLE = intArrayOf(7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767)
     }

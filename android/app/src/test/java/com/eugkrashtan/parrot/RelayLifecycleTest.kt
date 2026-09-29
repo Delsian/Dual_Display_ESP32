@@ -172,7 +172,8 @@ class RelayLifecycleTest {
         relay.bluetoothStateChanged()
         assertEquals(1, scanner.scanCallbacks.size)
     }
-    private fun ready(relay: VoiceRelay, battery: BluetoothGattCharacteristic? = null): Pair<BluetoothGatt, BluetoothGattCharacteristic> {
+    private fun ready(relay: VoiceRelay, battery: BluetoothGattCharacteristic? = null,
+                      logs: BluetoothGattCharacteristic? = null): Pair<BluetoothGatt, BluetoothGattCharacteristic> {
         relay.start()
         val device = adapter.getRemoteDevice("01:02:03:04:05:06")
         shadowOf(adapter.bluetoothLeScanner).scanCallbacks.single()
@@ -196,11 +197,20 @@ class RelayLifecycleTest {
             shadowOf(gatt).addDiscoverableService(batteryService)
             shadowOf(gatt).allowCharacteristicNotification(battery)
         }
+        if (logs != null) {
+            val logService = BluetoothGattService(UUID.fromString("6b520020-7c8e-4c30-9aa8-45e626d39b01"), 0)
+            logService.addCharacteristic(logs)
+            shadowOf(gatt).addDiscoverableService(logService)
+            shadowOf(gatt).allowCharacteristicNotification(logs)
+        }
         shadowOf(gatt).gattCallback.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
         // Complete platform callbacks explicitly; this is a simulated peripheral.
         if (battery != null) {
             shadowOf(gatt).gattCallback.onCharacteristicRead(gatt, battery, byteArrayOf(73), BluetoothGatt.GATT_SUCCESS)
             shadowOf(gatt).gattCallback.onDescriptorWrite(gatt, battery.descriptors.single(), BluetoothGatt.GATT_SUCCESS)
+        }
+        if (logs != null) {
+            shadowOf(gatt).gattCallback.onDescriptorWrite(gatt, logs.descriptors.single(), BluetoothGatt.GATT_SUCCESS)
         }
         shadowOf(gatt).gattCallback.onDescriptorWrite(gatt, descriptor, BluetoothGatt.GATT_SUCCESS)
         return gatt to tx
@@ -280,6 +290,86 @@ class RelayLifecycleTest {
         assertNull(level)
     }
 
+    @Test fun deviceLogNotificationsAreDecodedAndOldConnectionsIgnored() {
+        val output = StringBuilder()
+        val relay = VoiceRelay(app, object : VoiceRelay.Listener {
+            override fun relayConfig() = VoiceRelay.Config("")
+            override fun onStatus(message: String) {}
+            override fun onDeviceLog(text: String) { output.append(text) }
+        }).also { relays += it }
+        val logs = BluetoothGattCharacteristic(UUID.fromString("6b520021-7c8e-4c30-9aa8-45e626d39b01"),
+            BluetoothGattCharacteristic.PROPERTY_NOTIFY, 0)
+        logs.addDescriptor(BluetoothGattDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"),
+            BluetoothGattDescriptor.PERMISSION_WRITE))
+        val (gatt, tx) = ready(relay, logs = logs)
+        assertTrue(output.contains("stream connected"))
+        val callback = shadowOf(gatt).gattCallback
+        callback.onCharacteristicChanged(gatt, logs, byteArrayOf(0, 0, 0, 0) + "Audio: ".toByteArray())
+        logs.value = byteArrayOf(1, 0, 0, 0) + "ready\n".toByteArray()
+        callback.onCharacteristicChanged(gatt, logs)
+        loop.idle()
+        assertTrue(output.toString().endsWith("Audio: ready\n"))
+        recording(gatt, tx)
+        assertEquals("error:apikey", String(shadowOf(gatt).latestWrittenBytes))
+        relay.close()
+        val before = output.toString()
+        callback.onCharacteristicChanged(gatt, logs, byteArrayOf(2, 0, 0, 0) + "stale\n".toByteArray())
+        loop.idle()
+        assertEquals(before, output.toString())
+        assertTrue(before.contains("stream disconnected"))
+    }
+
+    @Test fun logHistoryIsBoundedRetainedAcrossRebindingAndClearable() {
+        val service = service()
+        val binder = service.onBind(Intent()) as RelayService.LocalBinder
+        var text = ""
+        binder.observeLogs { text = it.toString() }
+        repeat(3000) { service.onDeviceLog("Audio: ready\n") }
+        loop.idleFor(Duration.ofMillis(100))
+        assertTrue(text.length <= 32768)
+        assertTrue(text.endsWith("Audio: ready\n"))
+        binder.observeLogs(null)
+        service.onDeviceLog("new\n")
+        binder.observeLogs { text = it.toString() }
+        assertTrue(text.endsWith("new\n"))
+        binder.clearLogs()
+        assertEquals("", text)
+        loop.idleFor(Duration.ofMillis(100))
+        assertEquals("", text)
+    }
+
+    @Test fun commonLogsKeepSourceColorsAndCallCountersAcrossClear() {
+        val service = service()
+        val binder = service.onBind(Intent()) as RelayService.LocalBinder
+        var snapshot: CharSequence = ""
+        binder.observeLogs { snapshot = it }
+        service.onDeviceLog("Device line\n")
+        service.onStatus("App connection ready")
+        service.onAiCallStarted(1, false, 2500)
+        service.onAiCallFinished(1, false, "HTTP 429", 300, false)
+        service.onAiCallStarted(2, true, 2500)
+        loop.idleFor(Duration.ofMillis(100))
+        val spans = snapshot as android.text.Spanned
+        fun colorAt(text: String): Int {
+            val offset = snapshot.indexOf(text)
+            assertTrue(offset >= 0)
+            return spans.getSpans(offset, offset + 1, android.text.style.ForegroundColorSpan::class.java)
+                .single().foregroundColor
+        }
+        assertEquals(android.graphics.Color.rgb(0, 0, 139), colorAt("Device line"))
+        assertEquals(android.graphics.Color.BLACK, colorAt("App connection ready"))
+        assertEquals(android.graphics.Color.BLACK, colorAt("AI #1"))
+        assertTrue(binder.aiCounters().contains("AI calls: 2 · Free: 1 · Paid: 1"))
+        assertTrue(binder.aiCounters().contains("Succeeded: 0 · Failed: 1 · Pending: 1"))
+        service.onAiCallFinished(2, true, "clip:001", 500, true)
+        loop.idleFor(Duration.ofMillis(100))
+        assertTrue(snapshot.contains("late/cancelled; not delivered"))
+        assertTrue(binder.aiCounters().contains("Succeeded: 1 · Failed: 1 · Pending: 0"))
+        binder.clearLogs()
+        assertEquals("", snapshot.toString())
+        assertTrue(binder.aiCounters().contains("AI calls: 2"))
+    }
+
     @Test fun recordingReachesAiAndRepliesWithoutAnActivity() {
         var calls = 0
         val relay = VoiceRelay(app, object : VoiceRelay.Listener {
@@ -300,10 +390,19 @@ class RelayLifecycleTest {
 
     @Test fun freeFailureRetriesSameAudioWithPaidKey() {
         val calls = mutableListOf<String>()
+        val events = mutableListOf<String>()
         var firstAudio: ByteArray? = null
         val relay = VoiceRelay(app, object : VoiceRelay.Listener {
             override fun relayConfig() = VoiceRelay.Config("free-test-key", "paid-test-key")
             override fun onStatus(message: String) {}
+            override fun onAiCallStarted(id: Long, paid: Boolean, audioMs: Int) {
+                events += "start:$id:$paid"
+                assertEquals(260, audioMs)
+            }
+            override fun onAiCallFinished(id: Long, success: Boolean, outcome: String, elapsedMs: Long, stale: Boolean) {
+                events += "finish:$id:$success"
+                assertFalse(stale)
+            }
         }, { audio, key ->
             calls += key
             if (key == "free-test-key") {
@@ -317,6 +416,7 @@ class RelayLifecycleTest {
         recording(gatt, tx)
         assertEquals(listOf("free-test-key", "paid-test-key"), calls)
         assertEquals("clip:002", String(shadowOf(gatt).latestWrittenBytes))
+        assertEquals(listOf("start:1:false", "finish:1:false", "start:2:true", "finish:2:true"), events)
     }
 
     @Test fun stoppingDropsPendingAiReply() {

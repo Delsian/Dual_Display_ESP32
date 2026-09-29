@@ -1,3 +1,4 @@
+#include "device_log.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
@@ -74,14 +75,14 @@ bool save_device_config(const DeviceConfig &config) {
 void load_device_config() {
   current = defaults;
   if (!LittleFS.exists(CONFIG_PATH)) {
-    Serial.println(save_device_config(defaults) ? "Config: created /config.json."
+    DeviceLog.println(save_device_config(defaults) ? "Config: created /config.json."
                                                : "Config: could not save defaults; using defaults.");
     return;
   }
   File file = LittleFS.open(CONFIG_PATH, "r");
   DynamicJsonDocument doc(4096);
   if (!file || file.size() > 8192 || deserializeJson(doc, file)) {
-    Serial.println("Config: unreadable JSON; using defaults, file preserved.");
+    DeviceLog.println("Config: unreadable JSON; using defaults, file preserved.");
     return;
   }
   JsonObjectConst root = doc.as<JsonObjectConst>();
@@ -89,9 +90,9 @@ void load_device_config() {
   if (root.isNull() || !root["version"].is<uint32_t>() || root["version"].as<uint32_t>() != 1 ||
       !read_field(root, "audio_volume", candidate.audio_volume) ||
       !valid(candidate)) {
-    Serial.println("Config: invalid version or settings; using defaults, file preserved.");
+    DeviceLog.println("Config: invalid version or settings; using defaults, file preserved.");
     return;
   }
   current = candidate;
-  Serial.println("Config: loaded /config.json.");
+  DeviceLog.println("Config: loaded /config.json.");
 }

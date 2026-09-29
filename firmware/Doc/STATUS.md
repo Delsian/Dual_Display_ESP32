@@ -1,9 +1,13 @@
 # Current project status
 
-Updated: 2026-09-29. Scope: synchronized eye blinking added and build-tested.
+Updated: 2026-09-29. Scope: BLE device log endpoint added and build-tested.
 
 ## Implemented and build-tested
 
+- Authenticated BLE log notifications mirror application serial output through a
+  bounded queue/background task, with sequence/drop counters. Passkeys stay serial-only.
+  Target build and sanitized buffer tests passed (fragmentation, overflow, reset/wrap).
+  See [BLE contract and client handoff](BLE.md#device-log-service); Android log UI is pending.
 - Both eyes blink together after random 3–7 s open intervals: 80 ms closing,
   40 ms closed, 140 ms opening. Timing is nonblocking and rollover-safe.
   Target firmware build passed; blink upload and hardware validation pending.
@@ -34,5 +38,7 @@ Updated: 2026-09-29. Scope: synchronized eye blinking added and build-tested.
   one-second cooldown. KEY1 remains available.
 - `AUDIO_AI_REPLY_TEST=1`, `AUDIO_VOICE_ACTIVATION=1`, microphone channel 0.
 - Energy detection can trigger on background sounds; tune `AUDIO_VAD_MIN_RMS`.
-- Worker retired; Android calls Gemini directly. BLE contract is unchanged.
+- Worker retired; Android calls Gemini directly. BLE contract now includes device logs.
+- Log upload/hardware checks pending: pairing gate, MTUs, reconnects, loss handling,
+  and concurrent audio/animation. Existing clients require no counterpart changes.
 - Topic generator syntax/catalog parity passed; live Gemini/hardware checks pending.
