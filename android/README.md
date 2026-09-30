@@ -107,6 +107,29 @@ Older firmware shows a logs-unavailable message while voice operation continues.
 Reconnects reset decoding and resubscribe; the window marks connection boundaries.
 Pairing passkeys, ROM boot output, SDK logs and crash dumps are not included.
 
+## Update firmware over BLE
+
+1. Install OTA-capable firmware and the matching bootloader once using USB.
+2. Increase `FIRMWARE_VERSION` in firmware `include/firmware_version.h` and build.
+   Copy the target application's `firmware.bin` to the phone. Use a strictly newer
+   release; filesystem, bootloader and merged flash images are not accepted.
+3. Start the relay, pair if prompted, and wait for **Ready**. The main screen shows
+   the connected device's **Firmware** version (a dash means unavailable).
+4. Press **Update firmware**, select the `.bin` document and confirm **Update**.
+   Progress and errors appear in the app and foreground notification. No API key
+   or internet connection is required. Keep the phone near Parrot.
+5. Wait for verification and restart. The app reconnects to the same device and
+   compares its reported version with the uploaded version. Startup confirmation
+   or rollback still needs device verification; reconnect alone does not prove it.
+
+**Cancel update** aborts the transfer before boot selection commits. Closing the
+activity leaves the service uploading; **Stop background relay**, connection loss,
+or process death interrupts it. Retry interrupted uploads from the beginning.
+Each BLE operation/acknowledgment has a 20-second deadline and a transfer has a
+30-minute limit. Missing acknowledgments are recovered by reading status, without
+blindly repeating writes. OTA leaves settings, bonds and stored clips intact.
+Protocol and rollback prerequisites: [shared BLE contract](../firmware/Doc/BLE.md).
+
 ## Play a stored ESP32 clip
 
 Start the background relay and wait for **Ready**, enter a clip number or name (for example `1`,

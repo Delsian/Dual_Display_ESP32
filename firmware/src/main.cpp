@@ -26,6 +26,9 @@
 #include "device_config.h"
 #include "ble_config.h"
 #include "activity.h"
+#include "ble_ota.h"
+#include "ota_boot.h"
+#include "firmware_version.h"
 
 // --- FPS Counter Variables ---
 // --- LED Blink Configuration ---
@@ -96,6 +99,8 @@ void setup() {
   }
 
   DeviceLog.println("Booting " PROJECT_NAME " Firmware...");
+  DeviceLog.println("Firmware version: " FIRMWARE_VERSION);
+  ota_boot_begin();
   Serial.flush(); // Flush outgoing data
   // Initialize the LED pin as an output
   #if LED_PIN >= 0
@@ -105,6 +110,7 @@ void setup() {
 
   // Preserve configuration and assets if mounting fails; never auto-format.
   if (!LittleFS.begin(false)) {
+    ota_boot_failed("LittleFS mount failed");
     DeviceLog.println("FATAL: LittleFS mount failed. Upload filesystem image. Halting.");
     Serial.flush();
     // If even formatting fails, there is a hardware or configuration problem.
@@ -140,6 +146,7 @@ void setup() {
   restart_active_window();
   #if USE_AUDIO
     if (!init_audio()) {
+      ota_boot_failed("audio initialization failed");
       DeviceLog.println("Audio unavailable; continuing without recording/playback.");
     }
   #endif
@@ -160,6 +167,7 @@ void main_loop();
 void loop() {
   // Call the main application logic
   main_loop();
+  ota_boot_poll(audio_healthy() && ble_ota_ready());
 }
 
 void main_loop() {
@@ -186,12 +194,12 @@ void main_loop() {
   const unsigned long generation = ble_disconnect_generation();
   // A new disconnect resets the timer even if a brief connection occurred
   // entirely between render-loop iterations. Unsigned subtraction handles wrap.
-  if (awake || ble_connected() || generation != idle_generation) idle_since = current_millis;
+  if (awake || ble_connected() || ble_ota_active() || generation != idle_generation) idle_since = current_millis;
   idle_generation = generation;
   digitalWrite(TFT_BL, awake ? TFT_BACKLIGHT_ON : !TFT_BACKLIGHT_ON);
   digitalWrite(TFT_BL_R, awake ? TFT_BACKLIGHT_ON : !TFT_BACKLIGHT_ON);
   if (!awake) {
-    if (current_millis - idle_since >= IDLE_SHUTDOWN_MS && !device_active() && !ble_connected() &&
+    if (current_millis - idle_since >= IDLE_SHUTDOWN_MS && !ble_ota_active() && !device_active() && !ble_connected() &&
         ble_disconnect_generation() == idle_generation) {
       DeviceLog.println("Idle for one hour: shutting down. Press RESET to restart.");
       // Preserve dark displays and a muted amplifier throughout deep sleep.

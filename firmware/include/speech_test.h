@@ -8,6 +8,8 @@ class BLEServer;
 void init_voice_link(BLEServer *server);
 void voice_link_connected();
 void voice_link_disconnected();
+void cancel_voice_requests();
+bool speech_request_busy();
 
 // Plays a LittleFS clip locally: "12" -> clips/012.wav, "off_3", or random if empty.
 void request_speech_test(const char *clip);

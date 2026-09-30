@@ -9,9 +9,12 @@
 #include "drawing_tools.h"
 #include "speech_test.h"
 #include "activity.h"
+#include "ble_ota.h"
+#include "firmware_version.h"
 #include "device_log.h"
 
 namespace {
+static_assert(CONFIG_BT_SMP_MAX_BONDS >= 2, "BLE must retain bonds for at least two devices");
 constexpr char SERVICE_UUID[] = "6b520001-7c8e-4c30-9aa8-45e626d39b01";
 constexpr char PATCH_UUID[]   = "6b520002-7c8e-4c30-9aa8-45e626d39b01";
 constexpr char CONTROL_UUID[] = "6b520003-7c8e-4c30-9aa8-45e626d39b01";
@@ -44,17 +47,25 @@ class SecurityCallbacks : public BLESecurityCallbacks {
   bool onSecurityRequest() override { return true; }
   bool onConfirmPIN(uint32_t) override { return false; } // Display-only passkey entry.
   void onAuthenticationComplete(esp_ble_auth_cmpl_t auth) override {
+    ble_ota_authenticated(auth.success);
     pairing_visible.store(false);
-    DeviceLog.println(auth.success ? "BLE authenticated." : "BLE authentication failed.");
+    if (auth.success) {
+      DeviceLog.printf("BLE authenticated; stored bonds: %d.\n", esp_ble_get_bond_device_num());
+    } else {
+      DeviceLog.printf("BLE authentication failed: reason=0x%02x; stored bonds: %d.\n",
+                       auth.fail_reason, esp_ble_get_bond_device_num());
+    }
   }
 };
 
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *) override {
+    ble_ota_connected();
     voice_link_connected();
     connected.store(true);
   }
   void onDisconnect(BLEServer *) override {
+    ble_ota_disconnected();
     connected.store(false);
     disconnect_generation.fetch_add(1);
     device_log_disconnected();
@@ -144,7 +155,9 @@ void init_ble_config(int battery_percentage) {
   snprintf(name, sizeof(name), PROJECT_NAME "-%06lX", (unsigned long)(ESP.getEfuseMac() & 0xffffff));
   BLEDevice::init(name);
   BLEDevice::setMTU(185);
-  BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
+  // Reuse each peer's stored keys; new peers use the SC/MITM/bond policy below.
+  // ENCRYPT_MITM overrides that policy for new peers instead of preserving it.
+  BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT);
   BLEDevice::setSecurityCallbacks(&security_callbacks);
   BLESecurity security;
   // Bluedroid persists bond keys in NVS; reconnects reuse the authenticated bond.
@@ -153,6 +166,8 @@ void init_ble_config(int battery_percentage) {
   security.setKeySize(16);
   security.setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
   security.setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  DeviceLog.printf("BLE stored bonds: %d; capacity: %d.\n",
+                   esp_ble_get_bond_device_num(), CONFIG_BT_SMP_MAX_BONDS);
   BLEServer *server = BLEDevice::createServer();
   server->setCallbacks(&server_callbacks);
   BLEService *service = server->createService(SERVICE_UUID);
@@ -177,8 +192,14 @@ void init_ble_config(int battery_percentage) {
   last_battery_level = static_cast<uint8_t>(constrain(battery_percentage, 0, 100));
   battery_level->setValue(&last_battery_level, 1);
   battery->start();
+  auto *information = server->createService(BLEUUID(uint16_t(0x180A)));
+  auto *revision = information->createCharacteristic(
+      BLEUUID(uint16_t(0x2A26)), BLECharacteristic::PROPERTY_READ);
+  revision->setValue(FIRMWARE_VERSION);
+  information->start();
   init_voice_link(server);
   init_device_log(server);
+  init_ble_ota(server);
   auto *advertising = BLEDevice::getAdvertising();
   advertising->addServiceUUID(SERVICE_UUID);
   advertising->addServiceUUID(BLEUUID(uint16_t(0x180F)));

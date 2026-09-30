@@ -22,6 +22,8 @@ import kotlin.concurrent.thread
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var battery: TextView
+    private lateinit var firmware: TextView
+    private lateinit var otaProgress: TextView
     private var relay: RelayService.LocalBinder? = null
     private var bound = false
     private val connection = object : ServiceConnection {
@@ -29,11 +31,14 @@ class MainActivity : Activity() {
             relay = service as RelayService.LocalBinder
             relay?.observe { onStatus(it) }
             relay?.observeBattery { onBatteryLevel(it) }
+            relay?.observeFirmware { version -> runOnUiThread { firmware.text = "Firmware: ${version ?: "—"}" } }
+            relay?.observeOta { message -> runOnUiThread { otaProgress.text = message } }
             relay?.observeLogs(logViewUpdater)
         }
         override fun onServiceDisconnected(name: ComponentName) {
             relay = null
             onBatteryLevel(null)
+            firmware.text = "Firmware: —"
             onStatus("Relay restarting")
         }
     }
@@ -57,6 +62,8 @@ class MainActivity : Activity() {
         }
         status = TextView(this).apply { text = "Disconnected" }
         battery = TextView(this).apply { text = "Parrot battery: —" }
+        firmware = TextView(this).apply { text = "Firmware: —" }
+        otaProgress = TextView(this).apply { text = "No firmware update in progress" }
         if (!keyLoaded) status.text = "Could not read saved API key; open Settings"
         val settings = Button(this).apply {
             text = "Settings"
@@ -92,6 +99,7 @@ class MainActivity : Activity() {
         root.addView(TextView(this).apply { text = "Parrot Relay" })
         root.addView(status)
         root.addView(battery)
+        root.addView(firmware)
         root.addView(settings, buttonParams())
         root.addView(scan, buttonParams())
         root.addView(disconnect, buttonParams())
@@ -105,6 +113,22 @@ class MainActivity : Activity() {
         }, buttonParams())
         root.addView(clip, buttonParams())
         root.addView(play, buttonParams())
+        root.addView(Button(this).apply {
+            text = "Update firmware"
+            setOnClickListener {
+                if (relay == null) showMessage("Wait for relay service")
+                else startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                }, 2001)
+            }
+        }, buttonParams())
+        root.addView(otaProgress)
+        root.addView(Button(this).apply {
+            text = "Cancel update"
+            setOnClickListener { relay?.cancelUpdate() }
+        }, buttonParams())
         root.addView(Button(this).apply {
             text = "Logs"
             setOnClickListener { showDeviceLogs() }
@@ -121,6 +145,9 @@ class MainActivity : Activity() {
     override fun onStop() {
         relay?.observe(null)
         relay?.observeBattery(null)
+        relay?.observeFirmware(null)
+        relay?.observeOta(null)
+        firmware.text = "Firmware: —"
         relay?.observeLogs(null)
         onBatteryLevel(null)
         relay = null
@@ -306,6 +333,20 @@ class MainActivity : Activity() {
 
     private fun onBatteryLevel(level: Int?) {
         runOnUiThread { battery.text = level?.let { "Parrot battery: $it%" } ?: "Parrot battery: —" }
+    }
+
+    @Deprecated("Legacy Activity result API")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 2001 || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        catch (_: SecurityException) { /* Temporary document access may still be valid. */ }
+        AlertDialog.Builder(this).setTitle("Update Parrot firmware?")
+            .setMessage("The selected firmware.bin will replace the device firmware and restart Parrot. Keep Bluetooth connected.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Update") { _, _ -> relay?.updateFirmware(uri) ?: showMessage("Wait for relay service") }
+            .show()
     }
 
     private fun showMessage(message: String) {

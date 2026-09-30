@@ -40,6 +40,8 @@ class VoiceRelay(
         fun onStatus(message: String)
         fun onRequestActive(active: Boolean) {}
         fun onBatteryLevel(level: Int?) {}
+        fun onFirmwareVersion(version: String?) {}
+        fun onOtaStatus(active: Boolean, message: String) {}
         fun onDeviceLog(text: String) {}
         fun onAiCallStarted(id: Long, paid: Boolean, audioMs: Int) {}
         fun onAiCallFinished(id: Long, success: Boolean, outcome: String, elapsedMs: Long, stale: Boolean) {}
@@ -58,6 +60,21 @@ class VoiceRelay(
     private var rx: BluetoothGattCharacteristic? = null
     private var tx: BluetoothGattCharacteristic? = null
     private var battery: BluetoothGattCharacteristic? = null
+    private var firmware: BluetoothGattCharacteristic? = null
+    private var firmwareVersion: String? = null
+    private var ota: OtaSession? = null
+    private var otaControl: BluetoothGattCharacteristic? = null
+    private var otaData: BluetoothGattCharacteristic? = null
+    private var otaStatus: BluetoothGattCharacteristic? = null
+    private var negotiatedMtu = 23
+    private var expectedFirmware: String? = null
+    private var updatedAddress: String? = null
+    private val otaTick = object : Runnable {
+        override fun run() {
+            ota?.tick()
+            if (ota != null) main.postDelayed(this, 250)
+        }
+    }
     private var logs: BluetoothGattCharacteristic? = null
     private val logDecoder = DeviceLogDecoder()
     private var pcm = ByteArrayOutputStream()
@@ -115,11 +132,16 @@ class VoiceRelay(
                 return
             }
             battery = gatt.getService(BATTERY_SERVICE)?.getCharacteristic(BATTERY_LEVEL)
+            firmware = gatt.getService(DEVICE_INFORMATION)?.getCharacteristic(FIRMWARE_REVISION)
+            val updateService = gatt.getService(OTA_SERVICE)
+            otaControl = updateService?.getCharacteristic(OTA_CONTROL)
+            otaData = updateService?.getCharacteristic(OTA_DATA)
+            otaStatus = updateService?.getCharacteristic(OTA_STATUS)
             logs = gatt.getService(LOG_SERVICE)?.getCharacteristic(LOG_TX)
-            val level = battery
             bleOperation {
-                if (level != null && gatt.readCharacteristic(level)) true
-                else gatt.requestMtu(185)
+                val revision = firmware
+                if (revision != null && gatt.readCharacteristic(revision)) true
+                else readBatteryOrMtu(gatt)
             }
         }
 
@@ -133,6 +155,7 @@ class VoiceRelay(
                 retry("BLE MTU too small: $mtu")
                 return
             }
+            negotiatedMtu = mtu
             bleOperation {
                 val characteristic = battery
                 val descriptor = characteristic?.getDescriptor(CCCD)
@@ -159,6 +182,10 @@ class VoiceRelay(
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             if (!running || this@VoiceRelay.gatt !== gatt || descriptor.uuid != CCCD) return
+            if (descriptor.characteristic === otaStatus && ota != null) {
+                ota?.operationDone(status == BluetoothGatt.GATT_SUCCESS)
+                return
+            }
             if (descriptor.characteristic === battery) {
                 subscribeLogs(gatt)
                 return
@@ -178,10 +205,21 @@ class VoiceRelay(
             retryDelay = 5_000L
             main.removeCallbacks(setupTimeout)
             listener.onStatus("Ready")
+            expectedFirmware?.let { expected ->
+                listener.onOtaStatus(false, if (firmwareVersion == expected)
+                    "Reconnected: firmware $expected is running; startup rollback check may still be pending"
+                    else "Reconnected: expected $expected, reported ${firmwareVersion ?: "unknown"}; verify rollback/device")
+                expectedFirmware = null
+            }
         }
 
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
             main.post {
+                if (this@VoiceRelay.gatt === gatt && ota != null &&
+                    (characteristic === otaControl || characteristic === otaData)) {
+                    ota?.operationDone(status == BluetoothGatt.GATT_SUCCESS)
+                    return@post
+                }
                 if (this@VoiceRelay.gatt !== gatt || characteristic.uuid != VOICE_RX) return@post
                 main.removeCallbacks(writeTimeout)
                 writePending = false
@@ -210,10 +248,30 @@ class VoiceRelay(
     @SuppressLint("MissingPermission")
     private fun batteryRead(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic,
                             value: ByteArray, status: Int) {
+        if (!running || gatt !== connection) return
+        if (characteristic === otaStatus && ota != null) {
+            ota?.operationDone(status == BluetoothGatt.GATT_SUCCESS, value)
+            return
+        }
+        if (characteristic === firmware) {
+            val version = value.toString(Charsets.UTF_8)
+            firmwareVersion = version.takeIf { status == BluetoothGatt.GATT_SUCCESS &&
+                value.size in 1..31 && OtaImage.versionParts(it) != null }
+            listener.onFirmwareVersion(firmwareVersion)
+            bleOperation { readBatteryOrMtu(connection) }
+            return
+        }
         if (!running || gatt !== connection || characteristic !== battery) return
         if (status == BluetoothGatt.GATT_SUCCESS) updateBattery(value)
         listener.onStatus("Negotiating BLE MTU")
         bleOperation { connection.requestMtu(185) }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun readBatteryOrMtu(connection: BluetoothGatt): Boolean {
+        val level = battery
+        return if (level != null && connection.readCharacteristic(level)) true
+        else connection.requestMtu(185)
     }
 
     @SuppressLint("MissingPermission")
@@ -261,9 +319,10 @@ class VoiceRelay(
         main.post {
             if (!running || gatt !== connection) return@post
             when (characteristic) {
+                otaStatus -> ota?.notification(packet)
                 battery -> updateBattery(packet)
                 logs -> logDecoder.accept(packet).takeIf { it.isNotEmpty() }?.let(listener::onDeviceLog)
-                tx -> handlePacket(packet)
+                tx -> if (ota == null && expectedFirmware == null) handlePacket(packet)
             }
         }
     }
@@ -297,6 +356,7 @@ class VoiceRelay(
             override fun onScanResult(type: Int, result: ScanResult) {
                 main.post {
                     if (!running || activeScan !== this || gatt != null) return@post
+                    if (updatedAddress != null && result.device.address != updatedAddress) return@post
                     stopScan()
                     connect(result.device)
                 }
@@ -370,6 +430,10 @@ class VoiceRelay(
 
     @SuppressLint("MissingPermission")
     private fun clearConnection() {
+        main.removeCallbacks(otaTick)
+        val interrupted = ota
+        ota = null
+        interrupted?.disconnected()
         generation.incrementAndGet()
         main.removeCallbacks(setupTimeout)
         main.removeCallbacks(writeTimeout)
@@ -383,6 +447,13 @@ class VoiceRelay(
         rx = null
         tx = null
         battery = null
+        firmware = null
+        firmwareVersion = null
+        listener.onFirmwareVersion(null)
+        otaControl = null
+        otaData = null
+        otaStatus = null
+        negotiatedMtu = 23
         if (logs != null) listener.onDeviceLog("[Device log stream disconnected]\n")
         logs = null
         logDecoder.reset()
@@ -393,6 +464,8 @@ class VoiceRelay(
 
     fun close() {
         running = false
+        expectedFirmware = null
+        updatedAddress = null
         main.removeCallbacks(reconnect)
         stopScan()
         clearConnection()
@@ -529,6 +602,7 @@ class VoiceRelay(
 
     @SuppressLint("MissingPermission")
     fun playStoredClip(input: String) {
+        if (ota != null || expectedFirmware != null) { listener.onStatus("Wait for firmware update"); return }
         val name = ClipSelection.normalize(input)
         if (name == null) {
             listener.onStatus("Enter a clip number 1–999 or name such as off_1 (no .wav)")
@@ -566,6 +640,7 @@ class VoiceRelay(
     }
 
     fun setSleeping(sleeping: Boolean) {
+        if (ota != null || expectedFirmware != null) { listener.onStatus("Wait for firmware update"); return }
         if (!hasBluetoothPermission() || !subscribed || gatt == null || rx == null) {
             listener.onStatus("Connect and wait for Ready before Sleep/WakeUp")
             return
@@ -583,6 +658,74 @@ class VoiceRelay(
             return
         }
         writeReply(if (sleeping) "sleep" else "wakeup")
+    }
+
+    @SuppressLint("MissingPermission")
+    fun updateFirmware(image: OtaImage) {
+        val connection = gatt
+        if (!hasBluetoothPermission() || !subscribed || connection == null || writePending || ota != null || expectedFirmware != null) {
+            listener.onOtaStatus(false, "Wait for Ready and any BLE write/update to finish")
+            return
+        }
+        val control = otaControl
+        val data = otaData
+        val status = otaStatus
+        val descriptor = status?.getDescriptor(CCCD)
+        if (control == null || data == null || status == null || descriptor == null) {
+            listener.onOtaStatus(false, "OTA service missing; install OTA-capable firmware using USB first")
+            return
+        }
+        if (firmwareVersion != null && !OtaImage.higher(image.version, firmwareVersion!!)) {
+            listener.onOtaStatus(false, "Choose firmware newer than $firmwareVersion")
+            return
+        }
+        generation.incrementAndGet()
+        voiceBusy = false
+        pcm.reset()
+        val address = connection.device.address
+        lateinit var session: OtaSession
+        session = OtaSession(image, negotiatedMtu, SystemClock::elapsedRealtime, { operation ->
+            try {
+                val accepted = when (operation) {
+                    OtaSession.Operation.Subscribe -> {
+                        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        connection.setCharacteristicNotification(status, true) && connection.writeDescriptor(descriptor)
+                    }
+                    OtaSession.Operation.Read -> connection.readCharacteristic(status)
+                    is OtaSession.Operation.Write -> {
+                        val characteristic = if (operation.control) control else data
+                        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                        characteristic.value = operation.bytes
+                        connection.writeCharacteristic(characteristic)
+                    }
+                }
+                if (!accepted) session.fail("OTA BLE operation could not start")
+            } catch (_: SecurityException) { session.fail("Bluetooth permission unavailable") }
+        }, { message -> listener.onOtaStatus(true, message) }, { result, message ->
+            if (result == OtaSession.Result.COMPLETE) {
+                expectedFirmware = image.version
+                updatedAddress = address
+            }
+            listener.onOtaStatus(false, message)
+            main.post {
+                if (ota === session) {
+                    ota = null
+                    main.removeCallbacks(otaTick)
+                    if (result == OtaSession.Result.COMPLETE) {
+                        main.postDelayed({ if (gatt === connection) retry("Reconnecting after OTA restart") }, 1500)
+                    } else retry(message) // Disconnect releases any failed firmware session.
+                }
+            }
+        })
+        ota = session
+        session.start()
+        main.postDelayed(otaTick, 250)
+    }
+
+    fun cancelFirmwareUpdate(): Boolean {
+        val session = ota ?: return false
+        session.cancel()
+        return !session.ended
     }
 
     private fun wav(pcm: ByteArray, rate: Int): ByteArray {
@@ -614,6 +757,12 @@ class VoiceRelay(
         private val VOICE_RX = UUID.fromString("6b520012-7c8e-4c30-9aa8-45e626d39b01")
         private val CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private val BATTERY_SERVICE = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
+        private val DEVICE_INFORMATION = UUID.fromString("0000180a-0000-1000-8000-00805f9b34fb")
+        private val FIRMWARE_REVISION = UUID.fromString("00002a26-0000-1000-8000-00805f9b34fb")
+        private val OTA_SERVICE = UUID.fromString("6b520030-7c8e-4c30-9aa8-45e626d39b01")
+        private val OTA_CONTROL = UUID.fromString("6b520031-7c8e-4c30-9aa8-45e626d39b01")
+        private val OTA_DATA = UUID.fromString("6b520032-7c8e-4c30-9aa8-45e626d39b01")
+        private val OTA_STATUS = UUID.fromString("6b520033-7c8e-4c30-9aa8-45e626d39b01")
         private val BATTERY_LEVEL = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
         private val LOG_SERVICE = UUID.fromString("6b520020-7c8e-4c30-9aa8-45e626d39b01")
         private val LOG_TX = UUID.fromString("6b520021-7c8e-4c30-9aa8-45e626d39b01")

@@ -11,7 +11,8 @@ firmware internals belong to the sibling project.
 
 - [MainActivity.kt](../app/src/main/java/com/eugkrashtan/parrot/MainActivity.kt):
   programmatic UI, Settings with Free/Paid Save/Test controls, Bluetooth permission request,
-  service Start/Stop controls, stored ESP32 clip input/Play, bound status and Parrot battery percentage.
+  service Start/Stop controls, stored ESP32 clip input/Play, battery/firmware version,
+  and firmware document selection with update progress/Cancel.
 - [RelayService.kt](../app/src/main/java/com/eugkrashtan/parrot/RelayService.kt):
   connected-device foreground service owns the relay, notification, saved-key access,
   and bounded request wake lock; activity closure leaves it running.
@@ -22,7 +23,12 @@ firmware internals belong to the sibling project.
 - [VoiceRelay.kt](../app/src/main/java/com/eugkrashtan/parrot/VoiceRelay.kt): BLE
   filtered low-power scanning, automatic GATT reconnects, setup/write timeouts,
   notification subscription, packetized IMA ADPCM
-  decoding, direct Gemini classification, clip/ignore replies, and manual playback.
+  decoding, direct Gemini classification, clip/ignore replies, manual playback,
+  version discovery and serialized OTA operations with post-reboot reconnect.
+- [OtaImage.kt](../app/src/main/java/com/eugkrashtan/parrot/OtaImage.kt) validates
+  application image metadata/size/version and calculates SHA-256;
+  [OtaSession.kt](../app/src/main/java/com/eugkrashtan/parrot/OtaSession.kt) owns
+  acknowledged transfer, status recovery, cancellation and bounded timeouts.
 - [ClipSelection.kt](../app/src/main/java/com/eugkrashtan/parrot/ClipSelection.kt):
   validates local clip names and normalizes topic numbers before manual playback.
 - [GeminiIntent.kt](../app/src/main/java/com/eugkrashtan/parrot/GeminiIntent.kt):
@@ -43,6 +49,10 @@ firmware internals belong to the sibling project.
 
 ## Integration boundaries
 
+- OTA runs in the foreground service with a bounded wake lock; UI closure preserves
+  progress. Interrupted transfers start again from zero. The app prechecks newer
+  versions when known; firmware enforces the final rule. Reconnect reads running
+  version again but does not prove firmware startup-health confirmation.
 - The authoritative shared BLE contract is
   [firmware/Doc/BLE.md](../../firmware/Doc/BLE.md). Read it for protocol tasks;
   do not duplicate UUIDs, packet layouts, or protocol rules in this summary.

@@ -1,12 +1,17 @@
 # Current Android project status
 
-Updated: 2026-09-29. Scope: notification battery percentage and parrot icon.
+Updated: 2026-09-30. Scope: step 10 Android OTA and BLE firmware-version display.
 
 ## Implemented in source
 
-- Sleep/WakeUp buttons send authenticated voice commands via the relay service.
-  Sleep cancels AI results and retains BLE; matching firmware/hardware checks required.
-- Reference-inspired pirate-parrot adaptive launcher icon added; phone launcher check pending.
+- Firmware picker validates image size/metadata/version and SHA-256 before transfer.
+  Service owns serialized OTA writes, flash acknowledgments, status-read recovery,
+  progress/Cancel, timeouts and a bounded wake lock. UI closure retains progress.
+  Voice/play/sleep writes are suppressed during OTA; failures disconnect for cleanup.
+- Successful OTA reconnects to the updated device and compares its running version.
+  Firmware version is read at connection, retained across UI rebinding and cleared
+  on disconnect. Missing/invalid version does not block voice; firmware enforces upgrades.
+- Sleep/WakeUp send authenticated commands; Sleep cancels AI and retains BLE.
 - Common Logs shows device text dark blue and app text black, with Follow/Clear.
   AI counters track total/free/paid/succeeded/failed/pending classification calls;
   request logs show IDs, durations, results/safe errors. Clear preserves counters.
@@ -20,30 +25,24 @@ Updated: 2026-09-29. Scope: notification battery percentage and parrot icon.
   Stop control persisted enablement; boot/update and sticky restart are supported.
 - Low-power discovery and 5–30 s reconnect backoff handle disconnect/Bluetooth changes;
   setup/write timeouts and generation guards protect requests from stale callbacks.
-- Separate free/paid keys have masked Save/Test controls. Free failures retry once
-  with paid within the shared 25 s deadline; paid is used for one hour before free
-  is retried. Key changes/service recreation reset selection; empty paid disables it.
-- Bounded wake lock covers voice requests. Manual stored-clip playback remains available.
+- Free/paid key fallback, bounded voice wake lock and manual playback remain available.
 
 ## Validation and limits
 
 - Gradle 9.6.0 unit/lifecycle tests, debug APK build and lint passed offline.
-- Log tests cover UTF-8/line fragmentation, gaps/overflow, malformed/oversized data,
-  sequence wrap/reset, modern/legacy callbacks, voice routing, stale connections,
-  history limits, rebinding and Clear. Battery, fallback and prior lifecycle tests pass.
-  Common-log tests cover source colors, counters, retry events and safe error summaries.
-- No live Gemini call or physical phone/ESP32 test was performed for this change.
-- Sleep/WakeUp and logs require matching firmware; see the shared BLE contract.
-  Firmware/app deployment and hardware Sleep/WakeUp checks are pending.
+- 52 tests pass: OTA metadata/version/hash, ACK ordering, missing notifications,
+  cancellation, errors/offsets, timeout/disconnect, version discovery/rebinding,
+  plus existing logs, battery, AI fallback and relay lifecycle coverage.
+- No live Gemini or physical phone/ESP32 tests performed; firmware/app deployment pending.
 - Restart remains subject to Android/vendor policy; force-stop requires reopening.
   Multiple Parrots use the first match. Log history is lost on service destruction.
 - GitButler reports setup required; no session branch/commits/history changes made.
 
 ## Pending checks
 
-- Install firmware/app and verify colors/counters, pairing, log subscription, Follow/Clear,
-  reconnect boundaries, unavailable firmware, and concurrent logs/audio/animation.
+- Test real OTA success, Cancel, out-of-range/process loss, older-image rejection,
+  screen-off transfer, reconnect version identity, startup confirmation and rollback.
+  Initial OTA-capable firmware/matching bootloader installation requires USB.
 - Verify battery updates, permissions, notification Stop, activity closure, screen-off
   recording/AI replies, service/process restart, reboot and Bluetooth toggles.
-- Check stalled GATT, late replies, key changes, manual play and battery restrictions.
 - Confirm real Gemini fallback, hourly return to free, reply latency and quota behavior.

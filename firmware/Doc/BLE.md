@@ -14,6 +14,247 @@ Notification subscriptions are still reset and must be enabled on each connectio
 After upgrading from non-bonding firmware, forget an obsolete Parrot pairing on
 the phone and pair once again. Erasing device flash/NVS removes stored bonds.
 Bond reuse across reconnection/power cycles is implemented but hardware-unverified.
+At least two phones can retain independent bonds, with one active connection at
+a time. The installed SDK supports 15 bonds; a build assertion requires at least
+two. Connection encryption uses ESP_BLE_SEC_ENCRYPT to preserve the configured
+SC/MITM/bonding policy for new peers and reuse stored keys on reconnect.
+Protected GATT permissions still require MITM authentication. Diagnostics report
+stored bond counts and authentication failure reasons, without exposing keys.
+After flashing, forget obsolete phone pairings and pair each phone once. Validate
+by alternating phone A/B connections and notification subscriptions, then repeat
+after rebooting the firmware. Neither phone should require another passkey.
+These hardware checks remain pending. No Android or packet-format change is needed.
+
+## BLE OTA v1 contract (transfer implemented)
+
+Updated 2026-09-30. Steps 3–7 are implemented: authenticated service, bounded
+worker queue, exclusive mode, inactive-partition preparation, acknowledged Data
+writes and incremental SHA-256. Finish requires the declared byte count, matching
+hash and successful `esp_ota_end` image validation before selecting the new boot
+partition. Success reports complete and restarts after a 500 ms delivery interval.
+Abort, disconnect and 30-second receiving timeout release update mode and the
+OTA/hash resources. Flash operations are serialized; Abort waits for an in-flight
+operation to return and is checked before final boot activation begins.
+Target build and sanitized control/chunk validation tests passed; BLE/flash tests remain
+pending. A [Linux BLE test uploader](../scripts/README.md) supports preparation-only
+and complete uploads; simulated host tests pass, actual BLE upload remains unverified.
+Step 8 fault-injection tests also execute the real OTA worker with fake platform
+APIs: Abort/disconnect/timeout (including clock wrap), flash begin/write failure,
+hash mismatch, image/boot-selection failures, fresh retry and stale queued data.
+Cleanup invalidates a transfer epoch and clears queued errors/data before releasing
+exclusive mode. Late packets from a released transfer cannot start a new session;
+rejected packets do not extend the timeout. Tests do not emulate physical flash
+power loss or prove rollback behavior.
+Android's step 10 uploader is implemented; see [Android status](../../android/Doc/STATUS.md)
+for build and device validation. This
+section specifies firmware-only updates, not bootloader, partition-table, NVS,
+or LittleFS updates. An initial USB installation of OTA-capable firmware is
+required. Interrupted transfers restart from offset zero; persistent resume is
+out of scope. Startup confirmation and rollback requests are implemented as below;
+actual recovery on the device remains hardware-unverified.
+
+### Startup confirmation and rollback
+
+The installed ESP32-S3 `qio_opi` SDK has
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=1`. The supplied QIO bootloader ELF includes
+pending-image support. This is local toolchain evidence, not a readback of the
+device's bootloader: install the matching bootloader with a normal USB firmware
+upload before relying on rollback. App-only BLE OTA cannot replace a bootloader.
+
+Arduino normally confirms pending images before `setup()`. Firmware overrides
+its weak `verifyRollbackLater()` hook and confirms only `PENDING_VERIFY` images
+after LittleFS mounted, audio initialized, the BLE OTA worker/service started,
+and five seconds of successful main-loop iterations with audio task health.
+Display/sensor initialization is exercised by startup/rendering, but no physical
+display, microphone or speaker self-test is claimed. No phone connection is needed.
+
+A pending-image boot gets a 60-second deadline task. Mount/audio failure, failed
+health checks, expiry, or confirmation failure requests
+`esp_ota_mark_app_invalid_rollback_and_reboot()`. If no valid previous image exists,
+the failure is logged and the image is never confirmed; USB recovery is required.
+A reset/crash before confirmation allows the rollback-enabled bootloader to reject
+the unconfirmed image on the next boot. Previously confirmed and initial USB
+images do not run this validation path. This does not enable anti-rollback eFuses
+or signed-image enforcement, and does not protect against a later crash after
+confirmation or an image that removes its own validation logic.
+
+Separate hardware validation (pending): first install/boot known-good image A,
+OTA healthy B and verify the confirmation log; then OTA a test image that fails
+startup or hangs before confirmation and verify the deadline/reset returns to B.
+Also reset a pending image before confirmation and verify bootloader recovery.
+Check image identity from serial ELF/version output and preserved settings/clips;
+do not equate the uploader's `complete` packet with successful startup validation.
+
+### Verified flash layout
+
+The `esp32-s3-dualeye-touch-lcd-1_28` environment in `platformio.ini` selects
+the installed Arduino framework's `tools/partitions/default_16MB.csv` and 16 MB
+flash. No partition change is required:
+
+| Name | Type/subtype | Offset | Size (bytes) |
+| --- | --- | --- | --- |
+| nvs | data/nvs | `0x9000` | `0x5000` (20,480) |
+| otadata | data/ota | `0xe000` | `0x2000` (8,192) |
+| app0 | app/ota_0 | `0x10000` | `0x640000` (6,553,600) |
+| app1 | app/ota_1 | `0x650000` | `0x640000` (6,553,600) |
+| spiffs | data/spiffs, used for LittleFS | `0xc90000` | `0x360000` (3,538,944) |
+| coredump | data/coredump | `0xff0000` | `0x10000` (65,536) |
+
+On 2026-09-30, the existing local target `firmware.bin` measured 1,160,144
+bytes, leaving 5,393,456 bytes in either app slot. CSV non-overlap and flash
+bounds checks passed. This verifies local configuration/image fit, not the
+partition table deployed on hardware. Future images must be checked again;
+the OTA receiver must use the actual inactive partition's size at runtime.
+Only the inactive app partition and OTA boot metadata may be changed by OTA;
+preserve NVS/bonds/settings, LittleFS/clips, and coredump storage.
+
+### GATT endpoints and security
+
+Service UUID: `6b520030-7c8e-4c30-9aa8-45e626d39b01`.
+Register on the shared server before advertising; discover after connection,
+without adding another advertising UUID. All endpoints share the suffix
+`-7c8e-4c30-9aa8-45e626d39b01`:
+
+| UUID prefix | Name | Operations |
+| --- | --- | --- |
+| `6b520031` | Control | Write with response |
+| `6b520032` | Data | Write with response |
+| `6b520033` | Status | Read, Notify |
+
+Require encrypted, MITM-authenticated pairing for Control/Data writes, Status
+reads, and Status CCCD reads/writes. Only notify the authenticated subscribed
+connection. Subscribe before Begin; reset subscription on disconnect. Require
+negotiated ATT MTU at least 40; request 185. Each command/chunk is one complete
+characteristic write, not a prepared/long write. No text, terminators or hex
+encoding are used. All multibyte integers below are unsigned little-endian.
+
+### Control and data packets
+
+| Control command | Exact length | Layout |
+| --- | --- | --- |
+| Begin | 37 bytes | byte 0: `0x01`; bytes 1–4: image size; bytes 5–36: raw SHA-256 digest of the complete firmware.bin |
+| Finish | 1 byte | byte 0: `0x02` |
+| Abort | 1 byte | byte 0: `0x03` |
+
+Data writes contain a four-byte absolute image offset followed by at least one
+firmware byte. Maximum payload is `min(negotiated_MTU - 7, 508)` bytes (178 at MTU 185),
+respecting the 512-byte GATT characteristic-value limit;
+the final chunk may be shorter. Offset starts at zero. Reject empty payloads,
+offsets other than the next expected offset, or payloads exceeding the declared
+remaining size. The declared image must be nonempty and fit the inactive slot.
+The payload is the application `firmware.bin`, never a merged flash image.
+
+### Status packet and acknowledgment
+
+Status is exactly six bytes: byte 0 is state, bytes 1–4 are the next expected
+offset, byte 5 is error. The offset counts bytes successfully written and
+included in the running hash, not bytes merely received or queued.
+
+| State | Value | Meaning |
+| --- | --- | --- |
+| idle | `0x00` | No transfer; initial status is all zero bytes |
+| preparing | `0x01` | Begin accepted; flash preparation pending, offset zero |
+| receiving | `0x02` | Ready for the chunk at the reported offset |
+| verifying | `0x03` | Finish accepted; hash/image checks pending |
+| complete | `0x04` | Image valid and boot partition selected; reboot pending |
+| error | `0x05` | Transfer aborted; old boot selection retained |
+
+| Error | Value |
+| --- | --- |
+| None | `0x00` |
+| Malformed packet or unknown opcode | `0x01` |
+| Invalid state/busy | `0x02` |
+| Empty/oversized image or chunk exceeds image bounds | `0x03` |
+| Unexpected offset | `0x04` |
+| MTU below 40 | `0x05` |
+| No usable inactive OTA partition | `0x06` |
+| Flash begin/write failure | `0x07` |
+| SHA-256 mismatch | `0x08` |
+| Image validation failure | `0x09` |
+| Boot partition selection failure | `0x0a` |
+| Transfer timeout | `0x0b` |
+| Explicit abort | `0x0c` |
+| Connection lost | `0x0d` |
+| Queue/resource unavailable | `0x0e` |
+| Version not strictly higher, invalid version, or wrong project | `0x0f` |
+
+A GATT write response only confirms transport delivery. Publish Status after
+each state transition, rejected packet, and successfully written chunk; reads
+return the latest coherent snapshot. Client sends only one operation at a time
+and waits for its application acknowledgment before continuing. Start Data only
+after `receiving/0/none`. A chunk is acknowledged by `receiving/(offset+length)/none`.
+After a missed notification, read Status: advanced offset means accepted;
+unchanged offset with no error may mean still processing, so poll rather than
+enqueue duplicates. Duplicate/out-of-order packets never write flash twice.
+An unexpected-offset response reports the authoritative offset for recovery.
+
+Errors `0x01`–`0x05` and queue-full `0x0e` reject the operation without changing state or
+offset; the next successful operation clears the error. Preparation resource
+failure (`0x0e`, including failure to quiesce audio/voice within two seconds or
+initialize/update/finalize hashing) terminates the transfer in `error`. Operational failures
+`0x06`–`0x0d` and `0x0f` terminate the transfer in `error`, retaining the accepted offset
+for diagnostics. Begin from idle/error clears prior status; Begin during a live
+transfer is busy. Finish requires receiving with offset equal to declared size;
+early Finish is an invalid-state rejection. Abort terminates preparing/receiving/
+verifying; it is a no-op in idle/error and is rejected after complete. Control
+operations must be serialized with flash work so Abort cannot race boot selection.
+
+### Transfer lifecycle and client handoff
+
+Firmware versions are canonical numeric `major.minor.patch` releases, initially
+`1.0.0`, defined once in `include/firmware_version.h`. Each component is an
+unsigned 32-bit number; no leading zeros or prerelease/build suffixes are accepted.
+The string must fit the ESP descriptor's 32-byte field including its terminator.
+The target's PlatformIO hook `scripts/embed_version.py` updates the precompiled
+SDK application descriptor in the ELF before binary generation, including its
+project name `Parrot`. Boot logs show the same version.
+
+After hash/image validation, Finish reads the inactive partition's descriptor
+and requires project `Parrot` and a version numerically greater than the running
+build. Equal, older, missing or malformed versions return `0x0f` without selecting
+the new boot partition. This check is firmware-enforced, independent of uploader;
+Begin and transfer still run before rejection. Increase the header version and
+rebuild for each release (e.g. `1.0.1`). Older firmware lacking this check needs
+the initial enforcing release installed first. Automatic bootloader rollback
+and USB recovery remain possible; this is not eFuse anti-rollback or image signing.
+
+Begin enters exclusive update mode: stop audio/capture, invalidate voice jobs,
+reject new playback and Sleep/WakeUp commands, and inhibit inactivity shutdown.
+Keep BLE/status available. Finish verifies byte count, SHA-256 and ESP image
+validity before selecting the new boot partition. SHA-256 is corruption detection,
+not publisher authentication. Notify complete and allow a short delivery interval
+before reboot; a disconnect alone is not proof of success.
+
+Disconnect before complete, Abort, or 30 seconds without accepted transfer progress
+aborts the session and releases its resources without switching boot selection.
+Reads, rejected packets and duplicates do not extend the timeout. Before normal
+activity resumes, stale queued work must be invalidated. No transfer is resumed
+after reconnect; read status, then send a new Begin from zero. Complete is the
+success signal. Boot selection is a serialized commit operation: once it starts,
+a later Abort/disconnect cannot revoke it, and successful selection always reboots.
+An abort/disconnect observed before that operation prevents boot selection.
+
+Pending firmware work: physical recovery/rollback verification and hardware testing.
+Preparation preserves the existing
+manual-sleep/active-window policy; disconnect still starts its normal five-minute
+window. Update mode overrides audio activity and inhibits shutdown until released.
+Android provides a file picker, metadata/size/hash validation, secured service setup,
+serialized acknowledged writes, progress/errors, Cancel, and post-reboot reconnect
+to the updated device. It reads the running version again after reconnect;
+this proves image identity at that time, not completion of startup confirmation.
+Hardware power-loss tests
+and bootloader rollback verification remain required before deployment.
+
+## Firmware version service
+
+Device Information service `0x180A` exposes Firmware Revision String `0x2A26`
+as a read-only, unencrypted standard characteristic. The value is the running
+build's `FIRMWARE_VERSION`: canonical ASCII `major.minor.patch`, without a NUL
+terminator. It is available through service discovery, not advertising.
+Read it on each connection; there are no notifications or CCCD. Android shows
+the version on its main screen, caches it across activity rebinding, and clears
+it on disconnect. Missing or malformed values show a dash and do not block voice.
+The endpoint reports image identity, not OTA startup-health confirmation.
 
 ## Configuration service and characteristics
 

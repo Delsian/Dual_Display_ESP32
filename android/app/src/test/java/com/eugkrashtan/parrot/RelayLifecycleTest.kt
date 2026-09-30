@@ -173,7 +173,8 @@ class RelayLifecycleTest {
         assertEquals(1, scanner.scanCallbacks.size)
     }
     private fun ready(relay: VoiceRelay, battery: BluetoothGattCharacteristic? = null,
-                      logs: BluetoothGattCharacteristic? = null): Pair<BluetoothGatt, BluetoothGattCharacteristic> {
+                      logs: BluetoothGattCharacteristic? = null,
+                      revision: String? = null): Pair<BluetoothGatt, BluetoothGattCharacteristic> {
         relay.start()
         val device = adapter.getRemoteDevice("01:02:03:04:05:06")
         shadowOf(adapter.bluetoothLeScanner).scanCallbacks.single()
@@ -203,8 +204,19 @@ class RelayLifecycleTest {
             shadowOf(gatt).addDiscoverableService(logService)
             shadowOf(gatt).allowCharacteristicNotification(logs)
         }
+        val firmware = revision?.let {
+            BluetoothGattCharacteristic(UUID.fromString("00002a26-0000-1000-8000-00805f9b34fb"),
+                BluetoothGattCharacteristic.PROPERTY_READ, BluetoothGattCharacteristic.PERMISSION_READ)
+        }
+        if (firmware != null) {
+            val information = BluetoothGattService(UUID.fromString("0000180a-0000-1000-8000-00805f9b34fb"), 0)
+            information.addCharacteristic(firmware)
+            shadowOf(gatt).addDiscoverableService(information)
+        }
         shadowOf(gatt).gattCallback.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
         // Complete platform callbacks explicitly; this is a simulated peripheral.
+        if (firmware != null) shadowOf(gatt).gattCallback.onCharacteristicRead(
+            gatt, firmware, revision!!.toByteArray(), BluetoothGatt.GATT_SUCCESS)
         if (battery != null) {
             shadowOf(gatt).gattCallback.onCharacteristicRead(gatt, battery, byteArrayOf(73), BluetoothGatt.GATT_SUCCESS)
             shadowOf(gatt).gattCallback.onDescriptorWrite(gatt, battery.descriptors.single(), BluetoothGatt.GATT_SUCCESS)
@@ -228,6 +240,40 @@ class RelayLifecycleTest {
         // 13 packets x 320 samples = 4160 samples, little endian.
         callback.onCharacteristicChanged(gatt, tx, byteArrayOf(3, 0x40, 0x10, 0, 0))
         loop.idle()
+    }
+
+    @Test fun firmwareVersionReadValidatesAndClearsOnDisconnect() {
+        for (version in listOf("1.2.3", "invalid")) {
+            var reported: String? = null
+            val relay = VoiceRelay(app, object : VoiceRelay.Listener {
+                override fun relayConfig() = VoiceRelay.Config("")
+                override fun onStatus(message: String) {}
+                override fun onFirmwareVersion(version: String?) { reported = version }
+            }).also { relays += it }
+            ready(relay, revision = version)
+            assertEquals(if (version == "invalid") null else version, reported)
+            relay.close()
+            assertNull(reported)
+        }
+    }
+
+    @Test fun serviceRetainsVersionAndOtaProgressAcrossUiRebinding() {
+        val service = service()
+        val binder = service.onBind(Intent()) as RelayService.LocalBinder
+        service.onFirmwareVersion("1.2.3")
+        service.onOtaStatus(true, "OTA: 50%")
+        var version: String? = null
+        var progress = ""
+        binder.observeFirmware { version = it }
+        binder.observeOta { progress = it }
+        assertEquals("1.2.3", version)
+        assertEquals("OTA: 50%", progress)
+        binder.observeFirmware(null); binder.observeOta(null)
+        service.onFirmwareVersion(null)
+        service.onOtaStatus(false, "OTA disconnected")
+        binder.observeFirmware { version = it }; binder.observeOta { progress = it }
+        assertNull(version)
+        assertEquals("OTA disconnected", progress)
     }
 
     @Test fun batteryReadUpdatesAndDisconnectClearsWithoutConsumingVoicePackets() {
@@ -301,7 +347,7 @@ class RelayLifecycleTest {
         for (level in listOf(73, 0, 100, null)) {
             service.onBatteryLevel(level)
             val notification = manager.allNotifications.single()
-            assertEquals("Parrot relay · Battery: ${level?.let { "$it%" } ?: "—"}",
+            assertEquals("Parrot relay · ${level?.let { "$it%" } ?: "—"}",
                 notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString())
             assertEquals("Ready", notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
             assertEquals(R.drawable.ic_notification_parrot, notification.smallIcon.resId)

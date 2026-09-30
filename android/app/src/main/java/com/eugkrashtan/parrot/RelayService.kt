@@ -28,6 +28,13 @@ class RelayService : Service(), VoiceRelay.Listener {
     private var status = "Background relay stopped"
     private var observer: ((String) -> Unit)? = null
     private var batteryLevel: Int? = null
+    private var firmwareVersion: String? = null
+    private var firmwareObserver: ((String?) -> Unit)? = null
+    private var otaObserver: ((String) -> Unit)? = null
+    private var otaMessage = "No firmware update in progress"
+    private var otaBusy = false
+    private var otaLoadGeneration = 0
+    private lateinit var otaWakeLock: PowerManager.WakeLock
     private var batteryObserver: ((Int?) -> Unit)? = null
     private val logHistory = android.text.SpannableStringBuilder()
     private var logObserver: ((CharSequence) -> Unit)? = null
@@ -52,6 +59,33 @@ class RelayService : Service(), VoiceRelay.Listener {
         fun observeBattery(listener: ((Int?) -> Unit)?) {
             batteryObserver = listener
             listener?.invoke(batteryLevel)
+        }
+        fun observeFirmware(listener: ((String?) -> Unit)?) {
+            firmwareObserver = listener
+            listener?.invoke(firmwareVersion)
+        }
+        fun observeOta(listener: ((String) -> Unit)?) {
+            otaObserver = listener
+            listener?.invoke(otaMessage)
+        }
+        fun updateFirmware(uri: android.net.Uri) {
+            if (!foreground || otaBusy) { onOtaStatus(otaBusy, "Start relay and wait for any update to finish"); return }
+            val job = ++otaLoadGeneration
+            onOtaStatus(true, "Reading firmware file")
+            kotlin.concurrent.thread(name = "parrot-ota-file") {
+                val image = runCatching {
+                    contentResolver.openInputStream(uri)?.use(OtaImage::read) ?: error("Cannot open firmware file")
+                }
+                logHandler.post {
+                    if (job != otaLoadGeneration || !foreground) return@post
+                    image.fold({ relay.updateFirmware(it) }, { onOtaStatus(false, "Invalid firmware: ${it.message}") })
+                }
+            }
+        }
+        fun cancelUpdate() {
+            ++otaLoadGeneration
+            val pending = relay.cancelFirmwareUpdate()
+            onOtaStatus(pending, if (pending) "OTA: cancelling" else "OTA cancelled or no transfer active")
         }
         fun observe(listener: ((String) -> Unit)?) {
             observer = listener
@@ -85,6 +119,8 @@ class RelayService : Service(), VoiceRelay.Listener {
                 setReferenceCounted(false)
             }
         relay = VoiceRelay(applicationContext, this)
+        otaWakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Parrot:FirmwareUpdate").apply { setReferenceCounted(false) }
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "Parrot background relay", NotificationManager.IMPORTANCE_LOW))
         val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
@@ -122,6 +158,8 @@ class RelayService : Service(), VoiceRelay.Listener {
     }
 
     private fun stopRelay() {
+        ++otaLoadGeneration
+        onOtaStatus(false, "Firmware update stopped with relay")
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(ENABLED, false).apply()
         foreground = false
         relay.close()
@@ -151,6 +189,18 @@ class RelayService : Service(), VoiceRelay.Listener {
         batteryLevel = level
         batteryObserver?.invoke(level)
         if (foreground) getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
+    }
+    override fun onFirmwareVersion(version: String?) {
+        firmwareVersion = version
+        firmwareObserver?.invoke(version)
+    }
+    override fun onOtaStatus(active: Boolean, message: String) {
+        otaBusy = active
+        otaMessage = message
+        if (active) otaWakeLock.acquire(30 * 60_000L)
+        else if (otaWakeLock.isHeld) otaWakeLock.release()
+        otaObserver?.invoke(message)
+        onStatus(message)
     }
 
     override fun onDeviceLog(text: String) {
@@ -201,6 +251,10 @@ class RelayService : Service(), VoiceRelay.Listener {
         foreground = false
         observer = null
         batteryObserver = null
+        firmwareObserver = null
+        otaObserver = null
+        ++otaLoadGeneration
+        if (otaWakeLock.isHeld) otaWakeLock.release()
         logObserver = null
         logHandler.removeCallbacks(publishLogs)
         relay.close()

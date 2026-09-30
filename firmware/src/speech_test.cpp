@@ -4,6 +4,7 @@
 #include "speech_test.h"
 #include "ble_config.h"
 #include "activity.h"
+#include "ble_ota.h"
 
 #if USE_AUDIO
 #include "speech_clip.h"
@@ -28,6 +29,7 @@ struct SpeechAudio {
 namespace {
 constexpr size_t MAX_SPEECH_FRAMES = SPEECH_CLIP_SAMPLE_RATE * 10; // Ten seconds.
 std::atomic<bool> busy{false};
+std::atomic<uint32_t> cancel_generation{0};
 std::atomic<SpeechAudio *> ready{nullptr};
 
 void release(SpeechAudio *audio) {
@@ -44,8 +46,9 @@ void hand_off(SpeechAudio *audio) {
 
 // Decodes a prerecorded reply from LittleFS and hands it to the audio task.
 bool play_clip(const char *name, uint32_t started) {
+  const uint32_t cancellation = cancel_generation.load();
   const unsigned long generation = ble_disconnect_generation();
-  if (!device_active()) return false;
+  if (ble_ota_active() || !device_active()) return false;
   constexpr size_t MAX_CLIP_BYTES = 128 * 1024; // Ample bound for ten seconds of 16 kHz ADPCM plus headers.
   if (!speech_clip_name_valid(name)) { DeviceLog.println("Speech: invalid clip name."); return false; }
   char path[32];
@@ -68,6 +71,11 @@ bool play_clip(const char *name, uint32_t started) {
     delete audio;
     heap_caps_free(pcm);
     DeviceLog.printf("Speech: cannot load %s (%s).\n", path, frames ? "memory or decode" : "invalid clip");
+    return false;
+  }
+  if (ble_ota_active() || cancellation != cancel_generation.load()) {
+    heap_caps_free(pcm);
+    delete audio;
     return false;
   }
   audio->bytes.store(frames * 4);
@@ -156,6 +164,7 @@ bool send_message(const uint8_t *data, size_t bytes) {
 class VoiceRxCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *characteristic) override {
     const std::string value = characteristic->getValue();
+    if (ble_ota_active()) return;
     if (value == "sleep" || value == "wakeup") {
       set_device_sleeping(value == "sleep");
       if (value == "sleep") link_generation.fetch_add(1);
@@ -190,7 +199,7 @@ VoiceRxCallbacks voice_rx_callbacks;
 // clip choice. Returns true once clip audio reached the audio task.
 bool reply_to_recording(UploadJob *job) {
   const uint32_t generation = job->generation;
-  auto connected = [&] { return link_ready() && link_generation.load() == generation; };
+  auto connected = [&] { return !ble_ota_active() && link_ready() && link_generation.load() == generation; };
   auto fail = [&](const char *message) {
     const uint8_t cancel = 0x04;
     if (connected()) send_message(&cancel, 1);
@@ -301,6 +310,11 @@ void init_voice_link(BLEServer *server) {
 }
 
 void voice_link_connected() { link_connected.store(true); }
+void cancel_voice_requests() {
+  cancel_generation.fetch_add(1);
+  link_generation.fetch_add(1);
+}
+bool speech_request_busy() { return busy.load(); }
 
 void voice_link_disconnected() {
   link_generation.fetch_add(1);
@@ -310,6 +324,7 @@ void voice_link_disconnected() {
 
 // Serial "speech [N|off_K]": plays a clip from LittleFS without the network.
 void request_speech_test(const char *clip) {
+  if (ble_ota_active()) { DeviceLog.println("Speech: OTA update in progress."); return; }
   char name[20];
   if (!clip || !*clip) {
     if (!random_clip(name, sizeof(name))) {
@@ -328,7 +343,7 @@ void request_speech_test(const char *clip) {
 }
 
 bool audio_reply_available() {
-  return requests && device_active() && (link_ready() || !ble_connected()) && !busy.load();
+  return !ble_ota_active() && requests && device_active() && (link_ready() || !ble_connected()) && !busy.load();
 }
 
 bool begin_audio_reply(const uint8_t *stereo) {
@@ -367,7 +382,7 @@ void audio_reply_progress(size_t bytes, bool final) {
 SpeechAudio *take_speech_audio() {
   SpeechAudio *audio = ready.exchange(nullptr);
   if (audio) hand_off(audio);
-  if (audio && (!device_active() || audio->generation != ble_disconnect_generation())) {
+  if (audio && (ble_ota_active() || !device_active() || audio->generation != ble_disconnect_generation())) {
     release(audio);
     return nullptr;
   }
@@ -386,6 +401,8 @@ void release_speech_audio(SpeechAudio *audio) {
 #else
 void init_voice_link(BLEServer *) {}
 void voice_link_connected() {}
+void cancel_voice_requests() {}
+bool speech_request_busy() { return false; }
 void voice_link_disconnected() {}
 bool audio_reply_available() { return false; }
 void request_speech_test(const char *) { DeviceLog.println("Speech: audio is unavailable."); }

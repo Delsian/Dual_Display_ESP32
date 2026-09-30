@@ -68,8 +68,18 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
 
 ## Integration boundaries
 
+- BLE firmware-only OTA v1 is specified in [BLE.md](BLE.md#ble-ota-v1-contract-transfer-implemented).
+  Begin/Data/Finish with hash/image verification and reboot are implemented;
+  Linux test uploader is in [scripts](../scripts/README.md); Android uploader evidence
+  is in [Android status](../../android/Doc/STATUS.md). Hardware rollback checks remain pending.
+  Pending images are confirmed only after
+  startup health checks; failures/deadline request rollback. Preserve NVS/LittleFS.
+  Versions in `include/firmware_version.h` use numeric major.minor.patch; OTA Finish
+  only activates a higher Parrot version. Recovery rollback is exempt. The running
+  version is readable through the standard BLE Firmware Revision characteristic.
 - BLE pairing uses Secure Connections with MITM protection and persistent NVS
-  bonding. Initial pairing requires the displayed passkey; reconnects resubscribe
+  bonding for at least two phones, with one active connection at a time.
+  Initial pairing requires the displayed passkey; reconnects resubscribe
   to notifications while reusing stored keys. See BLE.md for recovery/validation.
 
 [BLE.md](BLE.md) is the authoritative shared BLE contract. Firmware owns capture

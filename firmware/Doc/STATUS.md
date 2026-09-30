@@ -1,21 +1,21 @@
 # Current project status
-
-Updated: 2026-09-29. Scope: audio stack-overflow fix built; hardware retest pending.
+Updated: 2026-09-30. Scope: two-phone BLE bonding and reconnect security.
 
 ## Implemented and build-tested
-
 - Boot, BLE disconnect, and each spoken reply start a five-minute active window.
   App Sleep turns eyes/audio off; WakeUp or disconnect clears the sleep override.
   Offline capture plays random off_*.wav fallback clips; connected relay flow stays.
   Window expiry turns off eyes/audio; one subsequent idle hour sleeps until RESET.
   Target build and active-window host checks passed; hardware validation pending.
 - Secure Connections/MITM bonding enabled with encryption/identity key distribution.
-  Target build passed; reconnect/reboot bond reuse still needs hardware validation.
+  Connection encryption preserves the configured bonding policy for new peers.
+  SDK capacity: 15 bonds; build asserts at least two; bond/failure diagnostics added.
+  Target build passed; two-phone reconnect/reboot subscriptions need hardware checks.
   Android needs no code change; forget any obsolete phone pairing and pair once again.
 - Authenticated BLE log notifications mirror application serial output through a
   bounded queue/background task, with sequence/drop counters. Passkeys stay serial-only.
   Target build and sanitized buffer tests passed (fragmentation, overflow, reset/wrap).
-  See [BLE contract and client handoff](BLE.md#device-log-service); Android log UI is pending.
+  See [BLE contract](BLE.md#device-log-service) and Android status for log UI evidence.
 - Both eyes blink together after random 3–7 s open intervals: 80 ms closing,
   40 ms closed, 140 ms opening. Timing is nonblocking and rollover-safe.
   Target firmware build passed; blink upload and hardware validation pending.
@@ -25,7 +25,6 @@ Updated: 2026-09-29. Scope: audio stack-overflow fix built; hardware retest pend
 - Wi-Fi removed; serial `speech` commands run in a dedicated task.
 - Config retains version/volume; old fields are ignored at boot and omitted
   on save. BLE patches reject removed fields; voice protocol is unchanged.
-
 - Audio stack-canary crash matched ELF 6125ac863604268d. Buffers moved off stack;
   Stack is now 8 KB, frame 2208 → 160 bytes; build passed. Hardware retest pending.
 - Disconnect invalidates the recording's connection generation and subscription;
@@ -46,4 +45,5 @@ Updated: 2026-09-29. Scope: audio stack-overflow fix built; hardware retest pend
 - Energy detection can trigger on background sounds; tune `AUDIO_VAD_MIN_RMS`.
 - Log upload/hardware checks pending: pairing gate, MTUs, reconnects, loss handling,
   and concurrent audio/animation. Existing clients require no counterpart changes.
-- Topic generator syntax/catalog parity passed; live Gemini/hardware checks pending.
+- OTA version/worker tests passed; version 1.0.0 is readable over BLE; target build passed.
+- Android OTA uploader is build-tested; see Android status. Physical update/rollback remains pending.

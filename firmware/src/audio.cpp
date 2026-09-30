@@ -8,6 +8,8 @@
 #include "speech_clip.h"
 #include "ble_config.h"
 #include "activity.h"
+#include "ble_ota.h"
+#include <atomic>
 
 #if USE_AUDIO
 #include <Wire.h>
@@ -32,6 +34,8 @@ static_assert(AUDIO_OUTPUT_VOLUME >= 0 && AUDIO_OUTPUT_VOLUME <= 100, "Invalid a
 
 uint8_t *record_buffer = nullptr;
 TaskHandle_t audio_task_handle = nullptr;
+std::atomic<bool> ota_quiesced{false};
+std::atomic<bool> task_healthy{false};
 
 struct RegisterValue {
   uint8_t reg;
@@ -100,6 +104,7 @@ bool set_audio_rate(uint32_t rate) {
 }
 
 void audio_task(void *) {
+  task_healthy.store(true);
   enum class State { Idle, Recording, Playing, Draining };
   State state = State::Idle;
   bool stable_pressed = false;
@@ -147,7 +152,7 @@ void audio_task(void *) {
     }
 
     const unsigned long generation = ble_disconnect_generation();
-    if (!device_active() || generation != connection_generation) {
+    if (ble_ota_active() || !device_active() || generation != connection_generation) {
       connection_generation = generation;
       if (state == State::Recording) finish_recording("idle or phone disconnected");
       digitalWrite(PIN_AUDIO_PA, LOW);
@@ -165,9 +170,12 @@ void audio_task(void *) {
       // A held button must be released and pressed again after reconnecting.
       stable_pressed = previous_raw = digitalRead(PIN_KEY1) == LOW;
       changed_at = millis();
+      ota_quiesced.store(ble_ota_active());
       vTaskDelay(1);
       continue;
     }
+
+    ota_quiesced.store(false);
 
     bool raw_pressed = digitalRead(PIN_KEY1) == LOW;
     if (raw_pressed != previous_raw) {
@@ -302,6 +310,7 @@ void audio_task(void *) {
     vTaskDelay(1);
   }
   digitalWrite(PIN_AUDIO_PA, LOW);
+  task_healthy.store(false);
   release_speech_audio(speech);
   i2s_driver_uninstall(AUDIO_PORT);
   heap_caps_free(record_buffer);
@@ -365,6 +374,10 @@ bool init_audio() {
   DeviceLog.println("Audio: initialization failed.");
   return false;
 }
+bool audio_ota_quiesced() { return !audio_task_handle || ota_quiesced.load(); }
+bool audio_healthy() { return task_healthy.load(); }
 #else
 bool init_audio() { return false; }
+bool audio_ota_quiesced() { return true; }
+bool audio_healthy() { return true; }
 #endif
