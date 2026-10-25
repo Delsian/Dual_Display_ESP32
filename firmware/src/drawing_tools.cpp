@@ -14,7 +14,7 @@
 #include <Arduino.h>
 
 // TFT library
-#include <TFT_eSPI.h> 
+#include <TFT_eSPI.h>
 #include "LittleFS.h"
 
 TFT_eSPI tft = TFT_eSPI();
@@ -181,7 +181,7 @@ void precalculate_scanlines() {
 }
 
 /**
- * @brief Loads a binary image file from LittleFS into a specified buffer in PSRAM. 
+ * @brief Loads a binary image file from LittleFS into a specified buffer in PSRAM.
  *        If PSRAM fails, it tries to allocate in internal RAM.
  * @param filename The path to the image file on LittleFS.
  * @param width The width of the image.
@@ -196,16 +196,16 @@ bool load_specific_eye_image(const char* filename, int16_t width, int16_t height
         DeviceLog.println(filename);
         return false;
     }
-    
+
     size_t file_size = file.size();
     size_t expected_size = width * height * sizeof(uint16_t);
-    
+
     if (file_size != expected_size) {
         DeviceLog.printf("File size mismatch! Expected %d, got %d\n", expected_size, file_size);
         file.close();
         return false;
     }
-    
+
     // Allocate memory and read the file
     *buffer = (uint16_t*)ps_malloc(file_size);
     if (!*buffer) {
@@ -218,10 +218,10 @@ bool load_specific_eye_image(const char* filename, int16_t width, int16_t height
         file.close();
         return false;
     }
-    
+
     file.read((uint8_t*)*buffer, file_size);
     file.close();
-    
+
     DeviceLog.printf("Image '%s' loaded successfully into RAM.\n", filename);
     return true;
 }
@@ -294,8 +294,8 @@ void init_tft() {
     select_screen(i);
     // TFT_RST=-1 makes the library software-reset only the selected panel.
     tft.init();
-    // LCD2 is mounted 180 degrees relative to LCD1 on the DualEye board.
-    tft.setRotation(i == EYE_RIGHT ? 2 : 0);
+    // Both eyes draw rotated 180 degrees on the DualEye board.
+    tft.setRotation(0);
     tft.fillScreen(TFT_BLACK);
     pinMode(backlight_pins[i], OUTPUT);
     digitalWrite(backlight_pins[i], TFT_BACKLIGHT_ON);
@@ -303,16 +303,16 @@ void init_tft() {
   }
 
 #else
-  
+
   // Select both screens for simultaneous initialization
   digitalWrite(screens[EYE_LEFT].CS, LOW);
   digitalWrite(screens[EYE_RIGHT].CS, LOW);
   delay(50); // Give displays time to register selection
 
-  
+
   log_tft_setup(); // Log the configuration details
 
-  
+
   DeviceLog.print("call tft.init ");
 #ifdef TFT_RST_R
   // The DualEye board has a separate reset line for the second display.
@@ -332,7 +332,7 @@ void init_tft() {
   DeviceLog.print("call setRotation ");
   tft.setRotation(0); // Set rotation to 0 degrees to correct inverted display
 #endif
-  
+
   digitalWrite(screens[EYE_LEFT].CS, HIGH);
   digitalWrite(screens[EYE_RIGHT].CS, HIGH);
 
@@ -398,7 +398,7 @@ void draw_eye_image(int16_t x_pos, int16_t y_pos, uint8_t eyelid_level) {
     int16_t src_y = src_y_accum >> 16;
     uint16_t* source_line = &eye_texture.buffer[src_y * EYE_IMAGE_WIDTH]; // Calculate source line address once
     uint16_t* framebuffer_line = &framebuffers[active_screen_index][(dest_y * SCR_WD)];
-    
+
     // Initialize the X accumulator for the first visible coordinate
     uint32_t src_x_accum = (x_start_draw - x_pos) * src_increment;
 
@@ -491,7 +491,7 @@ void draw_tof_debug_grid(int16_t x_pos, int16_t y_pos, int16_t grid_size, const 
                 // Map the distance to an intensity from 0.0 to 1.0
                 float intensity = (float)(dist - min_dist) / (float)(max_dist - min_dist);
                 intensity = constrain(intensity, 0.0f, 1.0f); // Clamp between 0 and 1
-                
+
                 //if (status == 5) { // Valid detection -> Grayscale
                     // Convert the intensity to an 8-bit grayscale value (0-255)
                     uint8_t gray_8bit = intensity * 255;

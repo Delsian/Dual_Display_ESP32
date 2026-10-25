@@ -437,8 +437,10 @@ are required; no new UUIDs or notification packets are introduced.
 
 Boot starts a five-minute active window with eyes and audio enabled even offline.
 Every spoken clip restarts that window at playback start and completion. While
-disconnected and active, voice/KEY1 capture uses a random local off_*.wav fallback
+disconnected and active, voice/KEY1 capture uses a local off_*.wav fallback
 after at least 0.25 seconds of captured audio; no BLE recording packets are sent.
+The first offline fallback after boot is random; later selections cycle through
+available numeric IDs in ascending order, wrapping to the lowest ID.
 The energy detector cannot distinguish speech from all background sounds offline.
 A connected central keeps the device active; connected capture still requires
 the authenticated voice subscription. Disconnect cancels the old connection's

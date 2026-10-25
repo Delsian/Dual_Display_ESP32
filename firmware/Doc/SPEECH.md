@@ -10,7 +10,9 @@ no TTS: all speech is prerecorded. To test clips without the network, send
 `speech 12` (clips/012.wav), `speech off_3`, or `speech` (random) on serial.
 
 Boot enables five minutes of offline activity. Without a phone, completed voice
-or KEY1 captures of at least 0.25 seconds play a random `off_*.wav` clip. Each
+or KEY1 captures of at least 0.25 seconds play an `off_*.wav` clip. The first offline
+fallback after boot is random; subsequent fallbacks cycle by numeric ID and wrap
+to the lowest available ID. Each
 played response restarts the five-minute window; noise may also trigger the energy
 detector offline. Window expiry turns off eyes/audio, followed by reset-only deep
 sleep after one idle hour. Hardware validation of these transitions is pending.

@@ -91,17 +91,39 @@ bool play_clip(const char *name, uint32_t started) {
 }
 
 // Picks a random clip name from /clips; returns false if none exist.
-bool random_clip(char *name, size_t size, bool fallback_only = false) {
+bool random_clip(char *name, size_t size) {
   File dir = LittleFS.open("/clips");
   size_t count = 0;
   for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
     const String file = f.name();
-    if (fallback_only && !file.startsWith("off_")) continue;
     // Reservoir sampling: one pass, uniform choice without storing names.
     if (!file.endsWith(".wav") || file.length() - 4 >= size || random(++count) != 0) continue;
     snprintf(name, size, "%.*s", int(file.length() - 4), file.c_str());
   }
   return count > 0;
+}
+
+// Start at a random fallback, then cycle through existing clips by numeric ID.
+// Called only by the voice task; the cursor resets on reboot.
+bool next_fallback_clip(char *name, size_t size) {
+  static long previous = 0;
+  File dir = LittleFS.open("/clips");
+  long first = 0, next = 0, selected = 0;
+  size_t count = 0;
+  for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
+    const String file = f.name();
+    if (!file.startsWith("off_") || !file.endsWith(".wav") || file.length() - 4 >= size) continue;
+    char *end = nullptr;
+    const long id = strtol(file.c_str() + 4, &end, 10);
+    if (id < 1 || id > 999 || strcmp(end, ".wav") != 0) continue;
+    if (!first || id < first) first = id;
+    if (id > previous && (!next || id < next)) next = id;
+    if (!previous && random(++count) == 0) selected = id;
+  }
+  if (!first) return false;
+  previous = previous ? (next ? next : first) : selected;
+  snprintf(name, size, "off_%ld", previous);
+  return true;
 }
 
 // The audio task appends while the voice task transmits. Even on disconnect,
@@ -274,7 +296,7 @@ void voice_task(void *) {
       char name[20];
       if (device_active() && job->generation == link_generation.load() &&
           job->bytes.load() / 4 >= MIN_UPLOAD_SAMPLES) {
-        if (random_clip(name, sizeof(name), true)) played = play_clip(name, job->started);
+        if (next_fallback_clip(name, sizeof(name))) played = play_clip(name, job->started);
         else DeviceLog.println("Speech: no fallback clips in /clips.");
       }
     } else {

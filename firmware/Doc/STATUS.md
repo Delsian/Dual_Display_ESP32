@@ -1,10 +1,14 @@
 # Current project status
-Updated: 2026-09-30. Scope: two-phone BLE bonding and reconnect security.
+Updated: 2026-10-25. Scope: offline fallback order and reproducible firmware build.
 
-## Implemented and build-tested
+## Implementation and validation
+- Offline fallbacks start randomly after boot, then cycle by numeric ID with wraparound.
+  Extracted-selector host checks passed (order, gaps, wrap, empty/single clip).
+  Target build passed with ESP32 platform 7.1.3 / Arduino 2.0.17 pinned; hardware pending.
+- 2026-10-06: Left eye rotated 180° (rotation 2, like right); build passed, hardware pending.
 - Boot, BLE disconnect, and each spoken reply start a five-minute active window.
   App Sleep turns eyes/audio off; WakeUp or disconnect clears the sleep override.
-  Offline capture plays random off_*.wav fallback clips; connected relay flow stays.
+  Offline capture plays off_*.wav fallback clips; connected relay flow stays.
   Window expiry turns off eyes/audio; one subsequent idle hour sleeps until RESET.
   Target build and active-window host checks passed; hardware validation pending.
 - Secure Connections/MITM bonding enabled with encryption/identity key distribution.
@@ -19,12 +23,8 @@ Updated: 2026-09-30. Scope: two-phone BLE bonding and reconnect security.
 - Both eyes blink together after random 3–7 s open intervals: 80 ms closing,
   40 ms closed, 140 ms opening. Timing is nonblocking and rollover-safe.
   Target firmware build passed; blink upload and hardware validation pending.
-- Added validated manual BLE playback, queued to the voice task with busy and
-  connection-generation guards. Existing recording/reply flow is unchanged.
-- Target build and clip host tests passed; Android build and 14 unit tests passed.
-- Wi-Fi removed; serial `speech` commands run in a dedicated task.
-- Config retains version/volume; old fields are ignored at boot and omitted
-  on save. BLE patches reject removed fields; voice protocol is unchanged.
+- Manual BLE playback uses busy/connection-generation guards; firmware build and clip tests passed.
+- Wi-Fi removed; serial `speech` uses a dedicated task. Config retains version/volume.
 - Audio stack-canary crash matched ELF 6125ac863604268d. Buffers moved off stack;
   Stack is now 8 KB, frame 2208 → 160 bytes; build passed. Hardware retest pending.
 - Disconnect invalidates the recording's connection generation and subscription;

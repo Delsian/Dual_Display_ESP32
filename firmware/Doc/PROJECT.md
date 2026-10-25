@@ -50,7 +50,8 @@ validation by the user. See [STATUS.md](STATUS.md) for the current stage.
   Local serial clip playback runs in a separate task. Boot starts a five-minute
   active window; BLE disconnect clears manual sleep and starts the same window.
   Each played response restarts it. While disconnected and active,
-  captured speech gets a random local fallback. A connected phone keeps the device
+  captured speech gets a local fallback: random first after boot, then cycling
+  through available clips by numeric ID. A connected phone keeps the device
   active. Once the offline window expires, eyes/audio turn off; after one hour in
   disconnected idle, deep sleep disables BLE until the reset button restarts it.
   App Sleep forces eyes/audio off while retaining BLE; WakeUp restores activity.
@@ -90,7 +91,9 @@ hand off contract impact, required counterpart changes, and validation evidence.
 
 ## Validation
 
-Build: `pio run -e esp32-s3-dualeye-touch-lcd-1_28`.
+Build: `pio run -e esp32-s3-dualeye-touch-lcd-1_28`. The main board pins
+PlatformIO ESP32 7.1.3 (Arduino 2.0.17 / ESP-IDF 4.4.7); Arduino 3.x BLE APIs
+are incompatible with the current firmware.
 Host tests: `test/audio_vad_test.cpp` and `test/speech_clip_test.cpp` with their
 corresponding source files and `-Iinclude`; Android owns classifier tests;
 see [SPEECH.md](SPEECH.md).
